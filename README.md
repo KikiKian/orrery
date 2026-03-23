@@ -1,4 +1,5 @@
 ﻿# orrery
+---
 A real-time 3D gravitational simulation written in C++ with OpenGL. Configure 2–8 bodies using real planetary presets or custom masses, then watch Newtonian gravity play out — complete with orbital trails, body mergers, and a live info panel.
 ---
  
@@ -41,6 +42,8 @@ A real-time 3D gravitational simulation written in C++ with OpenGL. Configure 2�
 g++ main.cpp physics.cpp glad.c -o grav_sim \
   -Iinclude -lglfw3 -lopengl32 -lgdi32 -std=c++17
 ```
+
+Pre-built Windows executables (`grav_sim.exe`, `grav_sim2.exe`) are included in the repo root.
  
 ### Linux
  
@@ -48,8 +51,6 @@ g++ main.cpp physics.cpp glad.c -o grav_sim \
 g++ main.cpp physics.cpp glad.c -o grav_sim \
   -Iinclude -lglfw -lGL -ldl -std=c++17
 ```
- 
-Pre-built Windows executables (`grav_sim.exe`, `grav_sim2.exe`) are included in the repo root.
  
 ---
 ## Physics
