@@ -1,6 +1,8 @@
 ﻿# orrery
 ---
-A real-time 3D gravitational simulation written in C++ with OpenGL. Configure 2–8 bodies using real planetary presets or custom masses, then watch Newtonian gravity play out — complete with orbital trails, body mergers, and a live info panel.
+## A real-time 3D gravitational simulation written in C++ with OpenGL. Configure 2–8 bodies using real planetary presets or custom masses, then watch Newtonian gravity play out — complete with orbital trails, body mergers, and a live info panel.
+
+Orerry (noun.) — a mechanical, usually clockwork-driven model of the solar system that illustrates the relative positions and motions of planets and moons, typically with a sun at the center.
 ---
  
 ![Alt text](/screenshots/screenshot1.png "Screenshot of Orrery")
