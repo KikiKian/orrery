@@ -39,6 +39,7 @@ double lastMouseX = 0.0, lastMouseY = 0.0;
 //--- Simulation state ---
 bool paused      = false;
 bool showPanel   = true;    // toggle with I key
+bool showForces  = true;    // toggle with F key
 int  numBodies   = 2;
 std::vector<Body>         bodiesInitial;
 std::deque<glm::vec3>     trails[8];
@@ -59,6 +60,8 @@ void keyCallback(GLFWwindow* window, int key, int scancode, int action, int mods
         paused = !paused;
     if (action == GLFW_PRESS && key == GLFW_KEY_I)
         showPanel = !showPanel;
+    if (action == GLFW_PRESS && key == GLFW_KEY_F)
+        showForces = !showForces;
     if (action == GLFW_PRESS || action == GLFW_REPEAT) {
         if (key == GLFW_KEY_UP   || key == GLFW_KEY_RIGHT)
             STEPS_PER_FRAME = glm::clamp(STEPS_PER_FRAME + 1, 1, 100);
@@ -224,6 +227,17 @@ std::string fmt(double val, int decimals = 2) {
     return ss.str();
 }
 
+//--- Format a double in scientific notation (e.g. 3.56e+22) ---
+std::string fmtSci(double val) {
+    if (val <= 0.0) return "0.00e+0";
+    int exp = (int)std::floor(std::log10(val));
+    double mantissa = val / std::pow(10.0, exp);
+    std::ostringstream ss;
+    ss << std::fixed << std::setprecision(2) << mantissa
+       << "e" << (exp >= 0 ? "+" : "") << exp;
+    return ss.str();
+}
+
 int main() {
     std::cout << "=== Gravity Simulation ===\n";
     std::cout << "Controls: Left drag = rotate | Scroll = zoom | Space = pause | R = reset | I = info panel\n\n";
@@ -360,7 +374,7 @@ int main() {
         return -1;
     }
 
-    glEnable(GL_POINT_SPRITE);
+    glEnable(GL_PROGRAM_POINT_SIZE);
     glEnable(GL_PROGRAM_POINT_SIZE);
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
@@ -441,6 +455,16 @@ int main() {
     glBindVertexArray(gridVAO);
     glBindBuffer(GL_ARRAY_BUFFER, gridVBO);
     glBufferData(GL_ARRAY_BUFFER, gridVertices.size() * sizeof(float), gridVertices.data(), GL_STATIC_DRAW);
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), (void*)0);
+    glEnableVertexAttribArray(0);
+
+    //--- Force arrow VAO/VBO — reused each frame for 3D force vectors ---
+    // Each arrow = shaft + 2 arrowhead lines = 6 vertices; max 8*7/2 = 28 pairs * 2 arrows = 56 arrows
+    unsigned int forceVAO, forceVBO;
+    glGenVertexArrays(1, &forceVAO); glGenBuffers(1, &forceVBO);
+    glBindVertexArray(forceVAO);
+    glBindBuffer(GL_ARRAY_BUFFER, forceVBO);
+    glBufferData(GL_ARRAY_BUFFER, 56 * 6 * 3 * sizeof(float), nullptr, GL_DYNAMIC_DRAW);
     glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), (void*)0);
     glEnableVertexAttribArray(0);
 
@@ -647,6 +671,75 @@ int main() {
             glDrawArrays(GL_POINTS, 0, 1);
         }
 
+        //--- Force arrows — 3D vectors showing gravitational pull between each pair ---
+        if (showForces && numBodies >= 2) {
+            glUseProgram(simpleShader);
+            glUniformMatrix4fv(sMVP, 1, GL_FALSE, glm::value_ptr(MVP));
+
+            // Find max pairwise force for normalization
+            double maxF = 0.0;
+            for (int i = 0; i < numBodies; i++)
+                for (int j = i+1; j < numBodies; j++) {
+                    double dx = bodies[j].x - bodies[i].x;
+                    double dy = bodies[j].y - bodies[i].y;
+                    double dz = bodies[j].z - bodies[i].z;
+                    double r2 = dx*dx + dy*dy + dz*dz + 1e18;
+                    double F  = G * bodies[i].mass * bodies[j].mass / r2;
+                    if (F > maxF) maxF = F;
+                }
+            if (maxF <= 0.0) maxF = 1.0;
+
+            const float maxArrowLen = 2.5f;
+            const float headLen     = 0.22f;
+            const float headWidth   = 0.10f;
+            float s = (float)RENDER_SCALE;
+
+            // Helper: upload and draw a single arrow (shaft + 2-line arrowhead)
+            auto drawArrow3D = [&](glm::vec3 base, glm::vec3 dir, float len, glm::vec3 col) {
+                glm::vec3 tip = base + dir * len;
+
+                // Pick a vector not parallel to dir to construct the arrowhead plane
+                glm::vec3 up   = (std::abs(dir.y) < 0.9f) ? glm::vec3(0,1,0) : glm::vec3(1,0,0);
+                glm::vec3 perp = glm::normalize(glm::cross(dir, up));
+
+                glm::vec3 hBase = tip - dir * headLen;
+                glm::vec3 h1    = hBase + perp * headWidth;
+                glm::vec3 h2    = hBase - perp * headWidth;
+
+                float v[] = {
+                    base.x, base.y, base.z,  tip.x, tip.y, tip.z,   // shaft
+                    tip.x,  tip.y,  tip.z,   h1.x,  h1.y,  h1.z,   // head left
+                    tip.x,  tip.y,  tip.z,   h2.x,  h2.y,  h2.z,   // head right
+                };
+                glBindVertexArray(forceVAO);
+                glBindBuffer(GL_ARRAY_BUFFER, forceVBO);
+                glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(v), v);
+                glUniform4f(sColor, col.r, col.g, col.b, 0.9f);
+                glDrawArrays(GL_LINES, 0, 6);
+            };
+
+            for (int i = 0; i < numBodies; i++) {
+                for (int j = i+1; j < numBodies; j++) {
+                    double dx = bodies[j].x - bodies[i].x;
+                    double dy = bodies[j].y - bodies[i].y;
+                    double dz = bodies[j].z - bodies[i].z;
+                    double r2 = dx*dx + dy*dy + dz*dz + 1e18;
+                    double F  = G * bodies[i].mass * bodies[j].mass / r2;
+
+                    float arrowLen = maxArrowLen * (float)std::sqrt(F / maxF);
+
+                    glm::vec3 posI = { (float)(bodies[i].x*s), (float)(bodies[i].y*s), (float)(bodies[i].z*s) };
+                    glm::vec3 posJ = { (float)(bodies[j].x*s), (float)(bodies[j].y*s), (float)(bodies[j].z*s) };
+                    glm::vec3 dirIJ = glm::normalize(posJ - posI);
+
+                    // Arrow on i pointing toward j (colored like i)
+                    drawArrow3D(posI,  dirIJ, arrowLen, BODY_COLORS[i]);
+                    // Arrow on j pointing toward i (colored like j)
+                    drawArrow3D(posJ, -dirIJ, arrowLen, BODY_COLORS[j]);
+                }
+            }
+        }
+
         //--- Info panel overlay (drawn in 2D screen space) ---
         if (showPanel) {
             glm::mat4 ortho = glm::ortho(0.0f, (float)screenW, (float)screenH, 0.0f, -1.0f, 1.0f);
@@ -654,7 +747,7 @@ int main() {
             glUniformMatrix4fv(sMVP, 1, GL_FALSE, glm::value_ptr(ortho));
 
             const float panelW    = 280.0f;
-            const float panelH    = 112.0f;
+            const float panelH    = 130.0f;
             const float panelGap  = 6.0f;
             const float textScale = 2.0f;
             const float lineH     = 18.0f;
@@ -715,6 +808,15 @@ int main() {
                 drawText(tx, ty, textScale,
                     "Mass  : " + fmt(massSolars[i], 5) + " M_sun",
                     glm::vec4(0.7f, 0.7f, 0.7f, 1.0f));
+                ty += lineH;
+
+                double Fmag = bodies[i].mass * std::sqrt(
+                    bodies[i].ax*bodies[i].ax +
+                    bodies[i].ay*bodies[i].ay +
+                    bodies[i].az*bodies[i].az);
+                drawText(tx, ty, textScale,
+                    "Force : " + fmtSci(Fmag) + " N",
+                    glm::vec4(0.8f, 0.65f, 1.0f, 1.0f));
             }
         }
 

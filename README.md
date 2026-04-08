@@ -30,6 +30,7 @@ Orerry (noun.) — a mechanical, usually clockwork-driven model of the solar sys
 | `Space` | Pause / resume simulation |
 | `R` | Reset to initial conditions |
 | `I` | Toggle info panel |
+| `F` | Toggle force arrows |
 | `↑` / `→` | Increase simulation speed |
 | `↓` / `←` | Decrease simulation speed |
 | `Escape` | Quit |
@@ -37,18 +38,62 @@ Orerry (noun.) — a mechanical, usually clockwork-driven model of the solar sys
 ---
 
 ## Building
- 
+
+### Dependencies
+
+| Library | Purpose |
+|---|---|
+| [GLFW3](https://www.glfw.org/) | Window creation and input handling |
+| [GLM](https://github.com/g-truc/glm) | OpenGL mathematics (vectors, matrices) |
+| [GLAD](https://glad.dav1d.de/) | OpenGL function loader (source included) |
+| [stb_easy_font](https://github.com/nothings/stb) | Header-only text rendering (included) |
+
+GLAD and stb_easy_font are already bundled in the repo. You only need to install GLFW3 and GLM.
+
+---
+
 ### Windows (MinGW / g++)
- 
+
+**Install dependencies via [vcpkg](https://vcpkg.io/):**
+```bash
+vcpkg install glfw3 glm
+```
+
+Or via [MSYS2](https://www.msys2.org/):
+```bash
+pacman -S mingw-w64-x86_64-glfw mingw-w64-x86_64-glm
+```
+
+**Build:**
 ```bash
 g++ main.cpp physics.cpp glad.c -o grav_sim \
   -Iinclude -lglfw3 -lopengl32 -lgdi32 -std=c++17
 ```
 
 Pre-built Windows executables (`grav_sim.exe`, `grav_sim2.exe`) are included in the repo root.
- 
+
+---
+
 ### Linux
- 
+
+**Install dependencies:**
+
+Debian / Ubuntu:
+```bash
+sudo apt install libglfw3-dev libglm-dev
+```
+
+Arch Linux:
+```bash
+sudo pacman -S glfw glm
+```
+
+Fedora:
+```bash
+sudo dnf install glfw-devel glm-devel
+```
+
+**Build:**
 ```bash
 g++ main.cpp physics.cpp glad.c -o grav_sim \
   -Iinclude -lglfw -lGL -ldl -std=c++17
