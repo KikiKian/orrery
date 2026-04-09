@@ -140,7 +140,7 @@ $LOW PRIORITY:
   [ ] Make units more relatable (kg, m, lb, etc.)
   [ ] Make custom planet and distance options for easier use
 
-$CHORES:
+$CHORE:
   [ ] Quality of life
     [ ] Make grid background better
       [ ] Extend grid further
