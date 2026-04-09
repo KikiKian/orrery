@@ -158,4 +158,11 @@ $CHORE:
     [ ] Add/Upate Screenshots
     [ ] Update build docs
     [ ] Add version docs
+
+$STUPID: 
+  Mis-spellings
+  early commit
+  etc.
+  forgot save
+
  ```
