@@ -1,7 +1,7 @@
-﻿# orrery
----
-## A real-time 3D gravitational simulation written in C++ with OpenGL. Configure 2–8 bodies using real planetary presets or custom masses, then watch Newtonian gravity play out — complete with orbital trails, body mergers, and a live info panel.
+﻿# Orrery
+ A real-time 3D gravitational simulation written in C++ with OpenGL. Configure 2–8 bodies using real planetary presets or custom masses, then watch Newtonian gravity play out — complete with orbital trails, body mergers, and a live info panel.
 
+##
 Orerry (noun.) — a mechanical, usually clockwork-driven model of the solar system that illustrates the relative positions and motions of planets and moons, typically with a sun at the center.
 ---
  
@@ -17,7 +17,6 @@ Orerry (noun.) — a mechanical, usually clockwork-driven model of the solar sys
 - **Orbital trails** — each body leaves a color-coded trail (up to 300 points)
 - **Live info panel** — real-time speed (km/s), distance (AU / million km), and mass (solar masses) per body
 - **Interactive 3D camera** — rotate, zoom, and pan freely
-- **2,000-star background** with a reference 3D grid
  
 ---
  
@@ -116,4 +115,47 @@ F = G * m1 * m2 / r²
 ```
  
 with acceleration applied in the direction of the unit vector between them.
- 
+
+---
+# Checklist / Tickets
+## Version: 1.0
+
+To add to checklist open issue!
+```
+$HIGH PRIORITY:
+  [ ] Add GUI
+    -> Use c++ module
+    -> Different module from different language
+    [ ] Make better input prompts
+
+  [ ] Make more realistic
+    [ ] Implement planet collisions
+    [ ] Switch from Velocity Verlet to another kick
+
+  [ ] Make packages universal for easier build
+    -> Use Docker maybe?
+    [ ] Figure out if we have to use glad_out
+
+$LOW PRIORITY:
+  [ ] Make units more relatable (kg, m, lb, etc.)
+  [ ] Make custom planet and distance options for easier use
+
+$CHORES:
+  [ ] Quality of life
+    [ ] Make grid background better
+      [ ] Extend grid further
+      [ ] Diff color
+    [ ] Better controls
+    [ ] Controls help menu
+    [ ] Escape menu
+
+  [ ] Dev quality of life
+    [ ] Add Dev tests
+    [ ] Better comments
+    [ ] Refactor so it's easier to understand
+
+  [ ] Documentation (.mds)
+    [ ] Add/Upate Screenshots
+    [ ] Update build docs
+    [ ] Add version docs
+ ```
