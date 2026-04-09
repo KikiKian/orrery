@@ -40,27 +40,27 @@ Orerry (noun.) — a mechanical, usually clockwork-driven model of the solar sys
 
 ### Dependencies
 
-| Library | Purpose |
-|---|---|
-| [GLFW3](https://www.glfw.org/) | Window creation and input handling |
-| [GLM](https://github.com/g-truc/glm) | OpenGL mathematics (vectors, matrices) |
-| [GLAD](https://glad.dav1d.de/) | OpenGL function loader (source included) |
-| [stb_easy_font](https://github.com/nothings/stb) | Header-only text rendering (included) |
+| Library | Purpose | Bundled? |
+|---|---|---|
+| [GLFW3](https://www.glfw.org/) | Window creation and input handling | Headers only — library must be installed |
+| [GLM](https://github.com/g-truc/glm) | OpenGL mathematics (vectors, matrices) | Yes (header-only) |
+| [GLAD](https://glad.dav1d.de/) | OpenGL function loader | Yes (`glad.c`, `include/glad/`) |
+| [stb_easy_font](https://github.com/nothings/stb) | Text rendering | Yes (`include/stb_easy_font.h`) |
 
-GLAD and stb_easy_font are already bundled in the repo. You only need to install GLFW3 and GLM.
+Only the **GLFW3 library** needs to be installed — everything else is already in the repo.
 
 ---
 
 ### Windows (MinGW / g++)
 
-**Install dependencies via [vcpkg](https://vcpkg.io/):**
+**Install GLFW3 via [vcpkg](https://vcpkg.io/):**
 ```bash
-vcpkg install glfw3 glm
+vcpkg install glfw3
 ```
 
 Or via [MSYS2](https://www.msys2.org/):
 ```bash
-pacman -S mingw-w64-x86_64-glfw mingw-w64-x86_64-glm
+pacman -S mingw-w64-x86_64-glfw
 ```
 
 **Build:**
@@ -75,21 +75,21 @@ Pre-built Windows executables (`grav_sim.exe`, `grav_sim2.exe`) are included in 
 
 ### Linux
 
-**Install dependencies:**
+**Install GLFW3:**
 
 Debian / Ubuntu:
 ```bash
-sudo apt install libglfw3-dev libglm-dev
+sudo apt install libglfw3-dev
 ```
 
 Arch Linux:
 ```bash
-sudo pacman -S glfw glm
+sudo pacman -S glfw
 ```
 
 Fedora:
 ```bash
-sudo dnf install glfw-devel glm-devel
+sudo dnf install glfw-devel
 ```
 
 **Build:**
@@ -120,49 +120,56 @@ with acceleration applied in the direction of the unit vector between them.
 # Checklist / Tickets
 ## Version: 1.0
 
-To add to checklist open issue!
-```
-$HIGH PRIORITY:
-  [ ] Add GUI
-    -> Use c++ module
-    -> Different module from different language
-    [ ] Make better input prompts
+> To add to the checklist, open an issue!
 
-  [ ] Make more realistic
-    [ ] Implement planet collisions
-    [ ] Switch from Velocity Verlet to another kick
+### High Priority
 
-  [ ] Make packages universal for easier build
-    -> Use Docker maybe?
-    [ ] Figure out if we have to use glad_out
+- [ ] Add GUI
+  - [ ] Evaluate C++ GUI options (ImGui, Qt, wxWidgets)
+  - [ ] Make better input prompts (body count, mass, velocity)
+  - [ ] Add real-time parameter editing while simulation runs
+- [ ] Make physics more realistic
+  - [ ] Implement proper planet collision / fragmentation
+  - [ ] Evaluate replacing Velocity Verlet (RK4, Leapfrog)
+  - [ ] Add relativistic corrections for very close orbits
+  - [ ] Add axial tilt and rotation for each body
+  - [ ] Model non-spherical bodies (oblateness / J2 perturbations)
+  - [ ] Add tidal forces between close bodies
+  - [ ] Implement Lagrange points and show them visually
+  - [ ] Support multi-star systems (barycenter tracking)
+  - [ ] Add atmospheric drag for low-orbit scenarios
+  - [ ] Variable time step — shrink dt automatically during close approaches
+  - [ ] Energy and angular momentum readout to measure integrator drift
+- [ ] Make build more portable
+  - [ ] Bundle or auto-fetch GLFW (CMake FetchContent or vcpkg manifest)
+  - [ ] Resolve `glad_out` vs `glad.c` — pick one and remove the other
+  - [ ] Add a `CMakeLists.txt` so users don't have to hand-write the compile command
 
-$LOW PRIORITY:
-  [ ] Make units more relatable (kg, m, lb, etc.)
-  [ ] Make custom planet and distance options for easier use
+### Low Priority
 
-$CHORE:
-  [ ] Quality of life
-    [ ] Make grid background better
-      [ ] Extend grid further
-      [ ] Diff color
-    [ ] Better controls
-    [ ] Controls help menu
-    [ ] Escape menu
+- [ ] Make units more relatable (kg, m/s, lb toggle)
+- [ ] Add custom planet name, mass, radius, and starting velocity options
+- [ ] Add preset solar system configurations (inner solar system, gas giants, etc.)
+- [ ] Time display (simulated years / days elapsed)
+- [ ] Export trail data to CSV for external analysis
 
-  [ ] Dev quality of life
-    [ ] Add Dev tests
-    [ ] Better comments
-    [ ] Refactor so it's easier to understand
+### Chore
 
-  [ ] Documentation (.mds)
-    [ ] Add/Upate Screenshots
-    [ ] Update build docs
-    [ ] Add version docs
-
-$STUPID: 
-  Mis-spellings
-  early commit
-  etc.
-  forgot save
-
- ```
+- [ ] Quality of life
+  - [ ] Make grid background better
+    - [ ] Extend grid further out
+    - [ ] Different / configurable grid color
+  - [ ] Better mouse sensitivity / control tuning
+  - [ ] In-sim controls help overlay (`H` key)
+  - [ ] Pause / escape menu with resume option
+  - [ ] Fullscreen toggle
+- [ ] Dev quality of life
+  - [ ] Add unit tests for physics (verlet integrator, merger logic)
+  - [ ] Add integration test: known orbit stays stable over N steps
+  - [ ] Better inline comments on non-obvious physics code
+  - [ ] Refactor `main.cpp` — split rendering, UI, and sim-loop into separate files
+  - [ ] Set up CI (GitHub Actions) to build on push
+- [ ] Documentation
+  - [ ] Add / update screenshots
+  - [ ] Update build docs once CMake is added
+  - [ ] Add version changelog
