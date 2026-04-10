@@ -483,7 +483,7 @@ int main() {
     for (auto& b : bodies) { pvx += b.mass * b.vx; pvy += b.mass * b.vy; pvz += b.mass * b.vz; }
     for (auto& b : bodies) { b.vx -= pvx/total_mass; b.vy -= pvy/total_mass; b.vz -= pvz/total_mass; }
 
-    // Compute initial forces so Velocity Verlet starts with correct accelerations
+    // Compute initial forces (not strictly needed for Yoshida ABA, but keeps accelerations valid for display)
     for (int i = 0; i < numBodies; i++)
         for (int j = i+1; j < numBodies; j++)
             computeGravity(bodies[i], bodies[j], G);
@@ -712,32 +712,41 @@ int main() {
 
         ImGui::End();
 
-        // Velocity Verlet: half-kick → drift → recompute forces → half-kick
+        // Yoshida 4th-order symplectic integrator (ABA composition of 3 leapfrog steps)
+        // 3 force evaluations per step; conserves energy far better than Verlet long-term
         if (!paused) {
+            // Yoshida (1990) coefficients
+            static const double w1 = 1.0 / (2.0 - std::cbrt(2.0));
+            static const double w0 = 1.0 - 2.0 * w1;
+            static const double c1 = w1 / 2.0;         // = c4 by symmetry
+            static const double c2 = (w0 + w1) / 2.0;  // = c3 by symmetry
+            static const double d1 = w1;                // = d3 by symmetry
+            static const double d2 = w0;
             for (int step = 0; step < STEPS_PER_FRAME; step++) {
-                // Half-kick: v += 0.5 * a * dt  (using forces from previous step)
-                for (auto& b : bodies) {
-                    b.vx += 0.5 * b.ax * dt;
-                    b.vy += 0.5 * b.ay * dt;
-                    b.vz += 0.5 * b.az * dt;
-                }
-                // Drift: x += v * dt
-                for (auto& b : bodies) {
-                    b.x += b.vx * dt;
-                    b.y += b.vy * dt;
-                    b.z += b.vz * dt;
-                }
-                // Recompute forces at new positions
-                for (auto& b : bodies) { b.ax = b.ay = b.az = 0.0; }
-                for (int i = 0; i < (int)bodies.size(); i++)
-                    for (int j = i+1; j < (int)bodies.size(); j++)
-                        computeGravity(bodies[i], bodies[j], G);
-                // Second half-kick: v += 0.5 * a * dt  (now uses new forces)
-                for (auto& b : bodies) {
-                    b.vx += 0.5 * b.ax * dt;
-                    b.vy += 0.5 * b.ay * dt;
-                    b.vz += 0.5 * b.az * dt;
-                }
+                auto recomputeForces = [&]() {
+                    for (auto& b : bodies) { b.ax = b.ay = b.az = 0.0; }
+                    for (int i = 0; i < (int)bodies.size(); i++)
+                        for (int j = i+1; j < (int)bodies.size(); j++)
+                            computeGravity(bodies[i], bodies[j], G);
+                };
+
+                // Sub-step 1: drift(c1) → forces → kick(d1)
+                for (auto& b : bodies) { b.x += b.vx*c1*dt; b.y += b.vy*c1*dt; b.z += b.vz*c1*dt; }
+                recomputeForces();
+                for (auto& b : bodies) { b.vx += b.ax*d1*dt; b.vy += b.ay*d1*dt; b.vz += b.az*d1*dt; }
+
+                // Sub-step 2: drift(c2) → forces → kick(d2)
+                for (auto& b : bodies) { b.x += b.vx*c2*dt; b.y += b.vy*c2*dt; b.z += b.vz*c2*dt; }
+                recomputeForces();
+                for (auto& b : bodies) { b.vx += b.ax*d2*dt; b.vy += b.ay*d2*dt; b.vz += b.az*d2*dt; }
+
+                // Sub-step 3: drift(c3=c2) → forces → kick(d3=d1)
+                for (auto& b : bodies) { b.x += b.vx*c2*dt; b.y += b.vy*c2*dt; b.z += b.vz*c2*dt; }
+                recomputeForces();
+                for (auto& b : bodies) { b.vx += b.ax*d1*dt; b.vy += b.ay*d1*dt; b.vz += b.az*d1*dt; }
+
+                // Final drift(c4=c1)
+                for (auto& b : bodies) { b.x += b.vx*c1*dt; b.y += b.vy*c1*dt; b.z += b.vz*c1*dt; }
 
                 // Collision/merger — if two bodies get within 0.005 AU they merge
                 for (int i = 0; i < (int)bodies.size(); i++) {
