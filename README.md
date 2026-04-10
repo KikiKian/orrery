@@ -126,7 +126,7 @@ with acceleration applied in the direction of the unit vector between them.
 
 ---
 # Checklist / Tickets
-## Version: 1.1
+## Version: 1.2
 
 > To add to the checklist, open an issue!
 
@@ -182,4 +182,4 @@ with acceleration applied in the direction of the unit vector between them.
 - [ ] Documentation
   - [ ] Add / update screenshots
   - [ ] Update build docs once CMake is added
-  - [ ] Add version changelog
+  - [x] ~~Add version changelog~~
