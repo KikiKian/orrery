@@ -132,10 +132,10 @@ with acceleration applied in the direction of the unit vector between them.
 
 ### High Priority
 
-- [x] Add GUI
+- ~~[x] Add GUI
   - [x] Evaluate C++ GUI options (ImGui, Qt, wxWidgets)
   - [x] Make better input prompts (body count, mass, velocity)
-  - [x] Add real-time parameter editing while simulation runs
+  - [x] Add real-time parameter editing while simulation runs~~
 - [ ] Make physics more realistic
   - [ ] Implement proper planet collision / fragmentation
   - [ ] Evaluate replacing Velocity Verlet (RK4, Leapfrog)
