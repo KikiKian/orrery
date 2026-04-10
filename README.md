@@ -125,10 +125,10 @@ F = G * m1 * m2 / r²
 with acceleration applied in the direction of the unit vector between them.
 
 ---
-# Checklist / Tickets
+# Tickets
 ## Version: 1.2
 
-> To add to the checklist, open an issue!
+> To add to the tickets, open an issue! To help the project, fork this repo, do/add to the tickets, and make a pull request.
 
 
 ### High Priority
@@ -150,6 +150,10 @@ with acceleration applied in the direction of the unit vector between them.
   - [ ] Add planet textures
   - [ ] Variable time step — shrink dt automatically during close approaches
   - [ ] Energy and angular momentum readout to measure integrator drift
+  - [ ] Add Spaceships (artemis II, Voyager, etc.) -- requested by kenlinkin2
+    - [ ] Abillity to control spaceship
+    - [ ] Affect of planets gravity on shpaceships
+    - [ ] Shape/texture of the spaceship
 - [ ] Make build more portable
   - [ ] Bundle or auto-fetch GLFW (CMake FetchContent or vcpkg manifest)
   - [x] ~~Resolve `glad_out` vs `glad.c` — pick one and remove the other~~
