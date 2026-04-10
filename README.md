@@ -133,12 +133,13 @@ with acceleration applied in the direction of the unit vector between them.
 
 ### High Priority
 - [x] ~~Add GUI~~
-- [x] ~~Evaluate C++ GUI options (ImGui, Qt, wxWidgets)~~
-- [x] ~~Make better input prompts (body count, mass, velocity)~~
-- [x] ~~Add real-time parameter editing while simulation runs~~
+  - [x] ~~Evaluate C++ GUI options (ImGui, Qt, wxWidgets)~~
+  - [x] ~~Make better input prompts (body count, mass, velocity)~~
+  - [x] ~~Add real-time parameter editing while simulation runs~~
 - [ ] Make physics more realistic
   - [ ] Implement proper planet collision / fragmentation
-  - [ ] Evaluate replacing Velocity Verlet (RK4, Leapfrog)
+  - [x] ~~Evaluate replacing Velocity Verlet (Yoshida)~~
+        -> Decided to go with Yoshida
   - [ ] Add relativistic corrections for very close orbits
   - [ ] Add axial tilt and rotation for each body
   - [ ] Model non-spherical bodies (oblateness / J2 perturbations)
@@ -146,6 +147,7 @@ with acceleration applied in the direction of the unit vector between them.
   - [ ] Implement Lagrange points and show them visually
   - [ ] Support multi-star systems (barycenter tracking)
   - [ ] Add atmospheric drag for low-orbit scenarios
+  - [ ] Add planet textures
   - [ ] Variable time step — shrink dt automatically during close approaches
   - [ ] Energy and angular momentum readout to measure integrator drift
 - [ ] Make build more portable
