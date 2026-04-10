@@ -20,6 +20,10 @@
 #define STB_EASY_FONT_IMPLEMENTATION
 #include "stb_easy_font.h"
 
+#include "imgui/imgui.h"
+#include "imgui/imgui_impl_glfw.h"
+#include "imgui/imgui_impl_opengl3.h"
+
 //--- Real unit constants ---
 const double G            = 6.674e-11;   // gravitational constant (m^3 kg^-1 s^-2)
 const double SOLAR_MASS   = 2.0e30;      // kg per solar mass
@@ -56,6 +60,8 @@ void processInput(GLFWwindow* window) {
 }
 
 void keyCallback(GLFWwindow* window, int key, int scancode, int action, int mods) {
+    ImGui_ImplGlfw_KeyCallback(window, key, scancode, action, mods);
+    if (ImGui::GetIO().WantCaptureKeyboard) return;
     if (action == GLFW_PRESS && key == GLFW_KEY_SPACE)
         paused = !paused;
     if (action == GLFW_PRESS && key == GLFW_KEY_I)
@@ -70,7 +76,13 @@ void keyCallback(GLFWwindow* window, int key, int scancode, int action, int mods
     }
 }
 
+void charCallback(GLFWwindow* window, unsigned int codepoint) {
+    ImGui_ImplGlfw_CharCallback(window, codepoint);
+}
+
 void mouseButtonCallback(GLFWwindow* window, int button, int action, int mods) {
+    ImGui_ImplGlfw_MouseButtonCallback(window, button, action, mods);
+    if (ImGui::GetIO().WantCaptureMouse) return;
     if (button == GLFW_MOUSE_BUTTON_LEFT) {
         if (action == GLFW_PRESS) {
             mouseHeld = true;
@@ -82,6 +94,8 @@ void mouseButtonCallback(GLFWwindow* window, int button, int action, int mods) {
 }
 
 void cursorPosCallback(GLFWwindow* window, double xpos, double ypos) {
+    ImGui_ImplGlfw_CursorPosCallback(window, xpos, ypos);
+    if (ImGui::GetIO().WantCaptureMouse) return;
     if (!mouseHeld) return;
     float dx = (float)(xpos - lastMouseX);
     float dy = (float)(ypos - lastMouseY);
@@ -93,6 +107,8 @@ void cursorPosCallback(GLFWwindow* window, double xpos, double ypos) {
 }
 
 void scrollCallback(GLFWwindow* window, double xoffset, double yoffset) {
+    ImGui_ImplGlfw_ScrollCallback(window, xoffset, yoffset);
+    if (ImGui::GetIO().WantCaptureMouse) return;
     camDist -= (float)yoffset * 1.5f;
     camDist = glm::clamp(camDist, 2.0f, 200.0f);
 }
@@ -239,52 +255,185 @@ std::string fmtSci(double val) {
 }
 
 int main() {
-    std::cout << "=== Gravity Simulation ===\n";
-    std::cout << "Controls: Left drag = rotate | Scroll = zoom | Space = pause | R = reset | I = info panel\n\n";
+    //--- Init GLFW ---
+    if (!glfwInit()) {
+        std::cout << "Failed to initialize GLFW\n";
+        return -1;
+    }
 
-    std::cout << "How many bodies? (2-8): ";
-    std::cin >> numBodies;
-    numBodies = glm::clamp(numBodies, 2, 8);
-    std::cout << "\n";
+    glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 4);
+    glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 6);
+    glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
 
-    // returns {massSolar, visualRadius, orbitalRadiusAU, name}
-    auto pickBody = [&](const char* label) -> std::tuple<double, double, double, std::string> {
-        std::cout << "Choose " << label << ":\n";
-        for (int i = 0; i < NUM_PRESETS; i++) {
-            if (i < NUM_PRESETS - 1)
-                std::cout << "  " << i+1 << ". " << PRESETS[i].name
-                          << " (" << PRESETS[i].massSolar << " M_sun"
-                          << ", orbit " << PRESETS[i].orbitalRadiusAU << " AU)\n";
-            else
-                std::cout << "  " << i+1 << ". Custom\n";
+    GLFWmonitor* monitor = glfwGetPrimaryMonitor();
+    const GLFWvidmode* mode = glfwGetVideoMode(monitor);
+    int screenW = mode->width, screenH = mode->height;
+    GLFWwindow* window = glfwCreateWindow(screenW, screenH, "Gravity Simulation", monitor, NULL);
+    if (!window) {
+        std::cout << "Failed to create GLFW window\n";
+        glfwTerminate();
+        return -1;
+    }
+
+    glfwMakeContextCurrent(window);
+    glfwSwapInterval(1);
+    glfwSetFramebufferSizeCallback(window, framebufferSizeCallback);
+
+    if (!gladLoadGLLoader((GLADloadproc)glfwGetProcAddress)) {
+        std::cout << "Failed to initialize GLAD\n";
+        glfwTerminate();
+        return -1;
+    }
+
+    glEnable(GL_PROGRAM_POINT_SIZE);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+
+    //--- Compile shaders ---
+    unsigned int planetShader = compileShader(planetVertSrc, planetFragSrc);
+    unsigned int simpleShader = compileShader(simpleVertSrc, simpleFragSrc);
+
+    int pMVP     = glGetUniformLocation(planetShader, "MVP");
+    int pRadius  = glGetUniformLocation(planetShader, "pointRadius");
+    int pCamDist = glGetUniformLocation(planetShader, "camDist");
+    int pColor   = glGetUniformLocation(planetShader, "planetColor");
+    int pAlpha   = glGetUniformLocation(planetShader, "alpha");
+    int sMVP     = glGetUniformLocation(simpleShader, "MVP");
+    int sColor   = glGetUniformLocation(simpleShader, "color");
+
+    //--- Init ImGui ---
+    IMGUI_CHECKVERSION();
+    ImGui::CreateContext();
+    ImGuiIO& io = ImGui::GetIO();
+    io.FontGlobalScale = 1.4f;
+    ImGui::StyleColorsDark();
+    // Tweak style for a cleaner dark look
+    ImGuiStyle& style = ImGui::GetStyle();
+    style.WindowRounding    = 8.0f;
+    style.FrameRounding     = 4.0f;
+    style.ItemSpacing       = ImVec2(10, 8);
+    style.WindowPadding     = ImVec2(18, 16);
+    ImGui_ImplGlfw_InitForOpenGL(window, false);  // we install callbacks manually
+    ImGui_ImplOpenGL3_Init("#version 460");
+
+    glfwSetKeyCallback(window, keyCallback);
+    glfwSetCharCallback(window, charCallback);
+    glfwSetMouseButtonCallback(window, mouseButtonCallback);
+    glfwSetCursorPosCallback(window, cursorPosCallback);
+    glfwSetScrollCallback(window, scrollCallback);
+
+    //--- Setup state ---
+    int  setupNumBodies = 2;
+    int  selectedPreset[8] = {0, 5, 0, 0, 0, 0, 0, 0};  // default: Sun + Earth
+    double customMass[8]   = {1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0};
+    bool launched = false;
+
+    // Build flat name list for ImGui::Combo
+    const char* presetNames[NUM_PRESETS];
+    for (int i = 0; i < NUM_PRESETS; i++) presetNames[i] = PRESETS[i].name;
+
+    //--- Setup render loop ---
+    while (!glfwWindowShouldClose(window) && !launched) {
+        glfwPollEvents();
+        ImGui_ImplOpenGL3_NewFrame();
+        ImGui_ImplGlfw_NewFrame();
+        ImGui::NewFrame();
+
+        float winW = 520.0f;
+        ImGui::SetNextWindowPos(ImVec2(screenW * 0.5f, screenH * 0.5f),
+                                ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+        ImGui::SetNextWindowSize(ImVec2(winW, 0), ImGuiCond_Always);
+        ImGui::Begin("Gravity Simulation", nullptr,
+                     ImGuiWindowFlags_NoResize |
+                     ImGuiWindowFlags_NoMove   |
+                     ImGuiWindowFlags_AlwaysAutoResize |
+                     ImGuiWindowFlags_NoCollapse);
+
+        ImGui::TextDisabled("Configure bodies, then launch.");
+        ImGui::Spacing();
+        ImGui::SliderInt("Number of Bodies", &setupNumBodies, 2, 8);
+        ImGui::Spacing();
+        ImGui::Separator();
+        ImGui::Spacing();
+
+        for (int i = 0; i < setupNumBodies; i++) {
+            ImGui::PushID(i);
+            glm::vec3 c = BODY_COLORS[i];
+            ImGui::ColorButton("##col",
+                ImVec4(c.r, c.g, c.b, 1.0f),
+                ImGuiColorEditFlags_NoTooltip | ImGuiColorEditFlags_NoBorder,
+                ImVec2(16, 16));
+            ImGui::SameLine();
+
+            char label[32];
+            snprintf(label, sizeof(label), "Body %d", i + 1);
+            ImGui::SetNextItemWidth(160);
+            ImGui::Combo(label, &selectedPreset[i], presetNames, NUM_PRESETS);
+            ImGui::SameLine();
+
+            if (selectedPreset[i] == NUM_PRESETS - 1) {
+                ImGui::SetNextItemWidth(130);
+                ImGui::InputDouble("M\xe2\x98\x89##custom", &customMass[i], 0.0, 0.0, "%.5f");
+                if (customMass[i] < 1e-8) customMass[i] = 1e-8;
+                if (customMass[i] > 100.0) customMass[i] = 100.0;
+            } else {
+                ImGui::TextDisabled("%.5f M\xe2\x98\x89  %.3f AU",
+                    PRESETS[selectedPreset[i]].massSolar,
+                    PRESETS[selectedPreset[i]].orbitalRadiusAU);
+            }
+            ImGui::PopID();
         }
-        std::cout << "Enter choice (1-" << NUM_PRESETS << "): ";
-        int choice; std::cin >> choice;
-        choice = glm::clamp(choice, 1, NUM_PRESETS) - 1;
-        if (choice < NUM_PRESETS - 1) {
-            std::cout << "Selected: " << PRESETS[choice].name << "\n\n";
-            return { PRESETS[choice].massSolar, PRESETS[choice].visualRadius,
-                     PRESETS[choice].orbitalRadiusAU, PRESETS[choice].name };
-        } else {
-            double mass;
-            std::cout << "Enter mass (solar masses): "; std::cin >> mass;
-            double rad = glm::clamp(20.0 * std::pow(mass, 0.8), 8.0, 70.0);
-            std::cout << "\n";
-            return { mass, rad, 1.0, "Custom" };  // default 1 AU
-        }
-    };
 
+        ImGui::Spacing();
+        ImGui::Separator();
+        ImGui::Spacing();
+
+        float btnW = 220.0f;
+        ImGui::SetCursorPosX((ImGui::GetWindowWidth() - btnW) * 0.5f);
+        ImGui::PushStyleColor(ImGuiCol_Button,        ImVec4(0.18f, 0.42f, 0.78f, 1.0f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.26f, 0.55f, 0.92f, 1.0f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive,  ImVec4(0.12f, 0.32f, 0.60f, 1.0f));
+        if (ImGui::Button("Launch Simulation", ImVec2(btnW, 0)))
+            launched = true;
+        ImGui::PopStyleColor(3);
+
+        ImGui::End();
+        ImGui::Render();
+
+        glClearColor(0.01f, 0.01f, 0.03f, 1.0f);
+        glClear(GL_COLOR_BUFFER_BIT);
+        ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+        glfwSwapBuffers(window);
+    }
+
+    if (glfwWindowShouldClose(window)) {
+        ImGui_ImplOpenGL3_Shutdown();
+        ImGui_ImplGlfw_Shutdown();
+        ImGui::DestroyContext();
+        glfwTerminate();
+        return 0;
+    }
+
+    //--- Populate bodies from setup choices ---
+    numBodies = setupNumBodies;
     std::vector<double> massSolars(numBodies);
     std::vector<double> radii(numBodies);
     std::vector<double> orbitalRadii(numBodies);
     bodyNames.resize(numBodies);
+
     for (int i = 0; i < numBodies; i++) {
-        std::string label = "Body " + std::to_string(i+1);
-        auto [m, r, orbitAU, name] = pickBody(label.c_str());
-        massSolars[i]   = m;
-        radii[i]        = r;
-        orbitalRadii[i] = orbitAU * AU;
-        bodyNames[i]    = name;
+        int choice = selectedPreset[i];
+        if (choice < NUM_PRESETS - 1) {
+            massSolars[i]   = PRESETS[choice].massSolar;
+            radii[i]        = PRESETS[choice].visualRadius;
+            orbitalRadii[i] = PRESETS[choice].orbitalRadiusAU * AU;
+            bodyNames[i]    = PRESETS[choice].name;
+        } else {
+            massSolars[i]   = customMass[i];
+            radii[i]        = glm::clamp(20.0 * std::pow(customMass[i], 0.8), 8.0, 70.0);
+            orbitalRadii[i] = 1.0 * AU;
+            bodyNames[i]    = "Custom";
+        }
     }
 
     std::vector<Body> bodies(numBodies);
@@ -340,56 +489,6 @@ int main() {
             computeGravity(bodies[i], bodies[j], G);
 
     bodiesInitial = bodies;
-
-    //--- Init GLFW ---
-    if (!glfwInit()) {
-        std::cout << "Failed to initialize GLFW\n";
-        return -1;
-    }
-
-    glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 4);
-    glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 6);
-    glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
-
-    GLFWmonitor* monitor = glfwGetPrimaryMonitor();
-    const GLFWvidmode* mode = glfwGetVideoMode(monitor);
-    int screenW = mode->width, screenH = mode->height;
-    GLFWwindow* window = glfwCreateWindow(screenW, screenH, "Gravity Simulation", monitor, NULL);
-    if (!window) {
-        std::cout << "Failed to create GLFW window\n";
-        glfwTerminate();
-        return -1;
-    }
-
-    glfwMakeContextCurrent(window);
-    glfwSwapInterval(1);
-    glfwSetFramebufferSizeCallback(window, framebufferSizeCallback);
-    glfwSetMouseButtonCallback(window, mouseButtonCallback);
-    glfwSetCursorPosCallback(window, cursorPosCallback);
-    glfwSetScrollCallback(window, scrollCallback);
-    glfwSetKeyCallback(window, keyCallback);
-
-    if (!gladLoadGLLoader((GLADloadproc)glfwGetProcAddress)) {
-        std::cout << "Failed to initialize GLAD\n";
-        return -1;
-    }
-
-    glEnable(GL_PROGRAM_POINT_SIZE);
-    glEnable(GL_PROGRAM_POINT_SIZE);
-    glEnable(GL_BLEND);
-    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-
-    //--- Compile shaders ---
-    unsigned int planetShader = compileShader(planetVertSrc, planetFragSrc);
-    unsigned int simpleShader = compileShader(simpleVertSrc, simpleFragSrc);
-
-    int pMVP     = glGetUniformLocation(planetShader, "MVP");
-    int pRadius  = glGetUniformLocation(planetShader, "pointRadius");
-    int pCamDist = glGetUniformLocation(planetShader, "camDist");
-    int pColor   = glGetUniformLocation(planetShader, "planetColor");
-    int pAlpha   = glGetUniformLocation(planetShader, "alpha");
-    int sMVP     = glGetUniformLocation(simpleShader, "MVP");
-    int sColor   = glGetUniformLocation(simpleShader, "color");
 
     //--- Planet VAO/VBO ---
     unsigned int planetVAO, planetVBO;
@@ -536,14 +635,82 @@ int main() {
 
     //--- Render loop ---
     while (!glfwWindowShouldClose(window)) {
+        glfwPollEvents();
+        ImGui_ImplOpenGL3_NewFrame();
+        ImGui_ImplGlfw_NewFrame();
+        ImGui::NewFrame();
+
         processInput(window);
 
-        if (glfwGetKey(window, GLFW_KEY_R) == GLFW_PRESS) {
+        if (!ImGui::GetIO().WantCaptureKeyboard &&
+            glfwGetKey(window, GLFW_KEY_R) == GLFW_PRESS) {
             bodies    = bodiesInitial;
             numBodies = (int)bodies.size();
             massSolars.resize(numBodies); radii.resize(numBodies); bodyNames.resize(numBodies);
             for (int i = 0; i < 8; i++) trails[i].clear();
         }
+
+        //--- Real-time controls panel ---
+        ImGui::SetNextWindowPos(ImVec2(18.0f, 18.0f), ImGuiCond_Always);
+        ImGui::SetNextWindowSize(ImVec2(300.0f, 0.0f), ImGuiCond_Always);
+        ImGui::SetNextWindowBgAlpha(0.80f);
+        ImGui::Begin("Controls", nullptr,
+            ImGuiWindowFlags_NoMove |
+            ImGuiWindowFlags_AlwaysAutoResize |
+            ImGuiWindowFlags_NoCollapse);
+
+        // Playback buttons
+        if (ImGui::Button(paused ? "Resume" : " Pause ", ImVec2(80, 0)))
+            paused = !paused;
+        ImGui::SameLine();
+        if (ImGui::Button("Reset", ImVec2(60, 0))) {
+            bodies    = bodiesInitial;
+            numBodies = (int)bodies.size();
+            massSolars.resize(numBodies); radii.resize(numBodies); bodyNames.resize(numBodies);
+            for (int i = 0; i < 8; i++) trails[i].clear();
+        }
+        ImGui::SameLine();
+        ImGui::TextDisabled("(R to reset)");
+
+        // Simulation speed
+        ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+        ImGui::SliderInt("##spf", &STEPS_PER_FRAME, 1, 100);
+        ImGui::SameLine(0, 6);
+        ImGui::Text("Speed: %d steps/frame", STEPS_PER_FRAME);
+
+        // Toggles
+        ImGui::Checkbox("Forces (F)", &showForces);
+        ImGui::SameLine();
+        ImGui::Checkbox("Info (I)", &showPanel);
+
+        ImGui::Separator();
+        ImGui::TextDisabled("Body masses (solar masses)");
+        ImGui::Spacing();
+
+        for (int i = 0; i < numBodies; i++) {
+            ImGui::PushID(i);
+            glm::vec3 c = BODY_COLORS[i];
+            ImGui::ColorButton("##col",
+                ImVec4(c.r, c.g, c.b, 1.0f),
+                ImGuiColorEditFlags_NoTooltip | ImGuiColorEditFlags_NoBorder,
+                ImVec2(14, 14));
+            ImGui::SameLine();
+            ImGui::Text("%s", bodyNames[i].c_str());
+
+            float massF = (float)massSolars[i];
+            ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+            if (ImGui::DragFloat("##mass", &massF,
+                    massF * 0.005f, 1e-8f, 100.0f,
+                    "%.6f M\xe2\x98\x89",
+                    ImGuiSliderFlags_Logarithmic)) {
+                massF = glm::clamp(massF, 1e-8f, 100.0f);
+                massSolars[i]  = (double)massF;
+                bodies[i].mass = massSolars[i] * SOLAR_MASS;
+            }
+            ImGui::PopID();
+        }
+
+        ImGui::End();
 
         // Velocity Verlet: half-kick → drift → recompute forces → half-kick
         if (!paused) {
@@ -820,10 +987,15 @@ int main() {
             }
         }
 
+        ImGui::Render();
+        ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+
         glfwSwapBuffers(window);
-        glfwPollEvents();
     }
 
+    ImGui_ImplOpenGL3_Shutdown();
+    ImGui_ImplGlfw_Shutdown();
+    ImGui::DestroyContext();
     glfwTerminate();
     return 0;
 }
