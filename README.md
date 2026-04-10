@@ -152,7 +152,7 @@ with acceleration applied in the direction of the unit vector between them.
   - [ ] Energy and angular momentum readout to measure integrator drift
 - [ ] Make build more portable
   - [ ] Bundle or auto-fetch GLFW (CMake FetchContent or vcpkg manifest)
-  - [ ] Resolve `glad_out` vs `glad.c` — pick one and remove the other
+  - [x] ~~Resolve `glad_out` vs `glad.c` — pick one and remove the other~~
   - [ ] Add a `CMakeLists.txt` so users don't have to hand-write the compile command
 
 ### Low Priority
