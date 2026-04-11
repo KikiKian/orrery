@@ -45,6 +45,7 @@ double lastMouseX = 0.0, lastMouseY = 0.0;
 bool paused      = false;
 bool showPanel   = true;    // toggle with I key
 bool showForces  = true;    // toggle with F key
+bool showSpin    = true;    // toggle with S key
 int  numBodies   = 2;
 std::vector<Body>         bodiesInitial;
 std::deque<glm::vec3>     trails[8];
@@ -69,6 +70,8 @@ void keyCallback(GLFWwindow* window, int key, int scancode, int action, int mods
         showPanel = !showPanel;
     if (action == GLFW_PRESS && key == GLFW_KEY_F)
         showForces = !showForces;
+    if (action == GLFW_PRESS && key == GLFW_KEY_S)
+        showSpin = !showSpin;
     if (action == GLFW_PRESS || action == GLFW_REPEAT) {
         if (key == GLFW_KEY_UP   || key == GLFW_KEY_RIGHT)
             STEPS_PER_FRAME = glm::clamp(STEPS_PER_FRAME + 1, 1, 100);
@@ -180,24 +183,27 @@ unsigned int compileShader(const char* vertSrc, const char* fragSrc) {
     return prog;
 }
 
-//--- Body presets with real masses and visual sizes ---
+//--- Body presets with real masses, visual sizes, and rotation data ---
 struct Preset {
     const char* name;
-    double massSolar;       // mass in solar masses
-    double visualRadius;    // visual size in pixels
-    double orbitalRadiusAU; // real mean orbital radius from the Sun in AU
+    double massSolar;        // mass in solar masses
+    double visualRadius;     // visual size in pixels
+    double orbitalRadiusAU;  // real mean orbital radius from the Sun in AU
+    double axialTiltDeg;     // obliquity — tilt of spin axis from +Y (degrees)
+    double spinPeriodDays;   // sidereal rotation period in days; negative = retrograde
 };
 const Preset PRESETS[] = {
-    { "Sun",     1.0,      40.0,  0.0   },
-    { "Jupiter", 9.54e-4,  28.0,  5.203 },
-    { "Saturn",  2.84e-4,  23.0,  9.537 },
-    { "Neptune", 5.15e-5,  16.0, 30.069 },
-    { "Uranus",  4.37e-5,  15.0, 19.191 },
-    { "Earth",   3.00e-6,  12.0,  1.000 },
-    { "Venus",   2.45e-6,  11.0,  0.723 },
-    { "Mars",    3.21e-7,   9.0,  1.524 },
-    { "Mercury", 1.65e-7,   7.0,  0.387 },
-    { "Custom",  0.0,       0.0,  0.0   },
+    //           name       mass       radius  orb.AU  tilt(°)  period(days)
+    { "Sun",     1.0,       40.0,   0.0,     7.25,    25.380  },
+    { "Jupiter", 9.54e-4,   28.0,   5.203,   3.13,     0.4135 },
+    { "Saturn",  2.84e-4,   23.0,   9.537,  26.73,     0.4440 },
+    { "Neptune", 5.15e-5,   16.0,  30.069,  28.32,     0.6713 },
+    { "Uranus",  4.37e-5,   15.0,  19.191,  97.77,    -0.7183 },  // near-sideways + retrograde
+    { "Earth",   3.00e-6,   12.0,   1.000,  23.44,     0.9973 },
+    { "Venus",   2.45e-6,   11.0,   0.723, 177.36,  -243.025  },  // retrograde
+    { "Mars",    3.21e-7,    9.0,   1.524,  25.19,     1.026  },
+    { "Mercury", 1.65e-7,    7.0,   0.387,   0.034,   58.646  },
+    { "Custom",  0.0,        0.0,   0.0,    23.0,      1.0    },
 };
 const int NUM_PRESETS = 10;
 
@@ -443,6 +449,20 @@ int main() {
         bodies[i].radius = radii[i];
         bodies[i].ax = bodies[i].ay = bodies[i].az = 0.0;
         bodies[i].vx = bodies[i].vy = bodies[i].vz = 0.0;
+
+        // Spin axis: tilt the +Y axis by the preset obliquity.
+        // Azimuth is spread evenly so bodies don't all point the same way.
+        int    choice      = selectedPreset[i];
+        double tiltDeg     = PRESETS[choice].axialTiltDeg;
+        double periodDays  = PRESETS[choice].spinPeriodDays;
+        double tiltRad     = tiltDeg * 3.14159265358979323846 / 180.0;
+        double azimuth     = 2.0 * 3.14159265358979323846 * i / numBodies;
+        bodies[i].spin_ax  = std::sin(tiltRad) * std::cos(azimuth);
+        bodies[i].spin_ay  = std::cos(tiltRad);
+        bodies[i].spin_az  = std::sin(tiltRad) * std::sin(azimuth);
+        bodies[i].rotation_angle   = 0.0;
+        bodies[i].angular_velocity = (periodDays != 0.0)
+            ? 2.0 * 3.14159265358979323846 / (periodDays * 86400.0) : 0.0;
     }
 
     double total_mass = 0.0;
@@ -571,6 +591,15 @@ int main() {
     glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), (void*)0);
     glEnableVertexAttribArray(0);
 
+    //--- Spin VAO/VBO — axis line (2 pts) + equatorial ring (up to 50 pts) per body ---
+    unsigned int spinVAO, spinVBO;
+    glGenVertexArrays(1, &spinVAO); glGenBuffers(1, &spinVBO);
+    glBindVertexArray(spinVAO);
+    glBindBuffer(GL_ARRAY_BUFFER, spinVBO);
+    glBufferData(GL_ARRAY_BUFFER, 52 * 3 * sizeof(float), nullptr, GL_DYNAMIC_DRAW);
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), (void*)0);
+    glEnableVertexAttribArray(0);
+
     //--- UI VAO/VBO — reused each frame for panel backgrounds, stems, and text quads ---
     unsigned int uiVAO, uiVBO;
     glGenVertexArrays(1, &uiVAO); glGenBuffers(1, &uiVBO);
@@ -690,6 +719,8 @@ int main() {
         ImGui::Checkbox("Forces (F)", &showForces);
         ImGui::SameLine();
         ImGui::Checkbox("Info (I)", &showPanel);
+        ImGui::SameLine();
+        ImGui::Checkbox("Spin (S)", &showSpin);
 
         ImGui::Separator();
         ImGui::TextDisabled("Body masses (solar masses)");
@@ -909,6 +940,10 @@ int main() {
                     }
                 }
             }
+            // Advance rotation phase
+            for (int i = 0; i < numBodies; i++)
+                bodies[i].rotation_angle += bodies[i].angular_velocity * dt;
+
             float s = (float)RENDER_SCALE;
             for (int i = 0; i < numBodies; i++) {
                 trails[i].push_back({ (float)bodies[i].x * s, (float)bodies[i].y * s, (float)bodies[i].z * s });
@@ -975,6 +1010,64 @@ int main() {
             glUniform1f(pRadius, (float)radii[i]);          // solid pass
             glUniform1f(pAlpha, 1.0f);
             glDrawArrays(GL_POINTS, 0, 1);
+        }
+
+        //--- Spin axes and equatorial rings ---
+        if (showSpin) {
+            glUseProgram(simpleShader);
+            glUniformMatrix4fv(sMVP, 1, GL_FALSE, glm::value_ptr(MVP));
+            glBindVertexArray(spinVAO);
+            glBindBuffer(GL_ARRAY_BUFFER, spinVBO);
+
+            const int N_RING = 48;
+
+            for (int i = 0; i < numBodies; i++) {
+                glm::vec3 col  = BODY_COLORS[i];
+                float cx = (float)(bodies[i].x * RENDER_SCALE);
+                float cy = (float)(bodies[i].y * RENDER_SCALE);
+                float cz = (float)(bodies[i].z * RENDER_SCALE);
+
+                // World-space half-length of axis line, scaled to match visual body size
+                float halfLen  = (float)radii[i] * 0.005f * camDist;
+                float ringR    = halfLen * 0.75f;
+
+                glm::vec3 axis = glm::normalize(glm::vec3(
+                    (float)bodies[i].spin_ax,
+                    (float)bodies[i].spin_ay,
+                    (float)bodies[i].spin_az));
+
+                // ---- Axis line ----
+                float axPts[6] = {
+                    cx - axis.x*halfLen, cy - axis.y*halfLen, cz - axis.z*halfLen,
+                    cx + axis.x*halfLen, cy + axis.y*halfLen, cz + axis.z*halfLen,
+                };
+                glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(axPts), axPts);
+                glUniform4f(sColor, col.r, col.g, col.b, 0.9f);
+                glDrawArrays(GL_LINES, 0, 2);
+
+                // ---- Equatorial ring ----
+                // Build two orthonormal vectors in the equatorial plane
+                glm::vec3 tmp = (std::abs(axis.y) < 0.9f) ? glm::vec3(0,1,0) : glm::vec3(1,0,0);
+                glm::vec3 u   = glm::normalize(glm::cross(axis, tmp));
+                glm::vec3 v   = glm::cross(axis, u);
+
+                // Rotate u/v by the current rotation_angle so the ring marker tracks the spin
+                float phi = (float)bodies[i].rotation_angle;
+                glm::vec3 uR =  std::cos(phi)*u + std::sin(phi)*v;
+                glm::vec3 vR = -std::sin(phi)*u + std::cos(phi)*v;
+
+                std::vector<float> ring;
+                ring.reserve((N_RING + 1) * 3);
+                for (int k = 0; k <= N_RING; k++) {
+                    float theta = 2.0f * 3.14159265f * k / N_RING;
+                    glm::vec3 pt = glm::vec3(cx,cy,cz)
+                        + ringR * (std::cos(theta)*uR + std::sin(theta)*vR);
+                    ring.push_back(pt.x); ring.push_back(pt.y); ring.push_back(pt.z);
+                }
+                glBufferSubData(GL_ARRAY_BUFFER, 0, ring.size()*sizeof(float), ring.data());
+                glUniform4f(sColor, col.r, col.g, col.b, 0.45f);
+                glDrawArrays(GL_LINE_STRIP, 0, N_RING + 1);
+            }
         }
 
         //--- Force arrows — 3D vectors showing gravitational pull between each pair ---

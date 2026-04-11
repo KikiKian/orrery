@@ -13,6 +13,7 @@ Orerry (noun.) — a mechanical, usually clockwork-driven model of the solar sys
 - **Real physics units** — gravitational constant G, solar masses, AU distances, and 1-day time steps
 - **Yoshida 4th-order symplectic integration** — 3-stage leapfrog composition for superior long-term orbital energy conservation
 - **1PN relativistic corrections** — Einstein-Infeld-Hoffmann equations applied per body pair, producing orbital precession (e.g. Mercury's 43″/century) for close or fast orbits
+- **Axial tilt and rotation** — each body spins on a physically accurate axis (real solar system obliquities and sidereal periods); visualised as a spin-axis line and equatorial ring (toggle `S`)
 - **2–8 configurable bodies** — choose from Sun, Jupiter, Saturn, Neptune, Uranus, Earth, Venus, Mars, Mercury, or a custom mass
 - **Physically-classified collisions** — close encounters (< 0.005 AU) are resolved into one of four regimes based on relative speed vs. mutual escape velocity and impact parameter:
   - **Hit-and-run** — grazing encounter; both bodies survive with a partially elastic impulse
@@ -36,6 +37,7 @@ Orerry (noun.) — a mechanical, usually clockwork-driven model of the solar sys
 | `R` | Reset to initial conditions |
 | `I` | Toggle info panel |
 | `F` | Toggle force arrows |
+| `S` | Toggle spin axes / equatorial rings |
 | `↑` / `→` | Increase simulation speed |
 | `↓` / `←` | Decrease simulation speed |
 | `Escape` | Quit |
