@@ -24,35 +24,34 @@
 #include "imgui/imgui_impl_glfw.h"
 #include "imgui/imgui_impl_opengl3.h"
 
-//--- Real unit constants ---
-const double G            = 6.674e-11;   // gravitational constant (m^3 kg^-1 s^-2)
-const double C_LIGHT      = 2.998e8;     // speed of light (m/s)
-const double SOLAR_MASS   = 2.0e30;      // kg per solar mass
-const double AU           = 1.496e11;    // meters per AU
-const double RENDER_SCALE = 5.0 / AU;    // 1 AU = 5 screen units
-const double dt           = 86400.0;     // 1 day per physics step
-int          STEPS_PER_FRAME = 5;        // physics steps per frame (arrow keys to adjust)
-const int    TRAIL_LENGTH    = 300;      // max trail points per body
+const double G            = 6.674e-11;   
+const double C_LIGHT      = 2.998e8;     
+const double SOLAR_MASS   = 2.0e30;      
+const double AU           = 1.496e11;    
+const double RENDER_SCALE = 5.0 / AU;    
+const double dt           = 86400.0;     
+int          STEPS_PER_FRAME = 5;        
+const int    TRAIL_LENGTH    = 300;      
 
-//--- Camera state ---
 float camYaw    = 0.0f;
 float camPitch  = 35.0f;
 float camDist   = 12.0f;
 bool  mouseHeld = false;
 double lastMouseX = 0.0, lastMouseY = 0.0;
 
-//--- Simulation state ---
 bool paused        = false;
-bool showPanel     = true;    // toggle with I key
-bool showForces    = true;    // toggle with F key
-bool showSpin      = true;    // toggle with S key
-bool showLagrange  = true;    // toggle with L key
+bool showPanel     = true;
+bool showForces    = true;
+bool showSpin      = true;
+bool showLagrange  = true;
+bool showCOM       = true;
 int  numBodies   = 2;
 std::vector<Body>         bodiesInitial;
 std::deque<glm::vec3>     trails[8];
-std::vector<std::string>  bodyNames;   // stores chosen preset names
+std::vector<std::string>  bodyNames;
+double E0 = 0.0;
+double L0 = 0.0;
 
-//--- Callbacks ---
 void framebufferSizeCallback(GLFWwindow* window, int width, int height) {
     glViewport(0, 0, width, height);
 }
@@ -75,6 +74,8 @@ void keyCallback(GLFWwindow* window, int key, int scancode, int action, int mods
         showSpin = !showSpin;
     if (action == GLFW_PRESS && key == GLFW_KEY_L)
         showLagrange = !showLagrange;
+    if (action == GLFW_PRESS && key == GLFW_KEY_B)
+        showCOM = !showCOM;
     if (action == GLFW_PRESS || action == GLFW_REPEAT) {
         if (key == GLFW_KEY_UP   || key == GLFW_KEY_RIGHT)
             STEPS_PER_FRAME = glm::clamp(STEPS_PER_FRAME + 1, 1, 100);
@@ -120,7 +121,6 @@ void scrollCallback(GLFWwindow* window, double xoffset, double yoffset) {
     camDist = glm::clamp(camDist, 2.0f, 200.0f);
 }
 
-//--- Planet shader — circle shape with soft glow edge ---
 const char* planetVertSrc = R"(
 #version 460 core
 layout (location = 0) in vec3 position;
@@ -147,7 +147,6 @@ void main() {
 }
 )";
 
-//--- Simple shader — used for grid, trails, stars, and UI ---
 const char* simpleVertSrc = R"(
 #version 460 core
 layout (location = 0) in vec3 position;
@@ -166,7 +165,6 @@ void main() {
 }
 )";
 
-//--- Compile and link a shader program ---
 unsigned int compileShader(const char* vertSrc, const char* fragSrc) {
     unsigned int vs = glCreateShader(GL_VERTEX_SHADER);
     glShaderSource(vs, 1, &vertSrc, NULL);
@@ -186,47 +184,49 @@ unsigned int compileShader(const char* vertSrc, const char* fragSrc) {
     return prog;
 }
 
-//--- Body presets with real masses, visual sizes, rotation, oblateness, and tidal data ---
 struct Preset {
     const char* name;
-    double massSolar;        // mass in solar masses
-    double visualRadius;     // visual size in pixels
-    double orbitalRadiusAU;  // real mean orbital radius from the Sun in AU
-    double axialTiltDeg;     // obliquity — tilt of spin axis from +Y (degrees)
-    double spinPeriodDays;   // sidereal rotation period in days; negative = retrograde
-    double J2;               // second zonal harmonic (oblateness); 0 = perfect sphere
-    double R_eq;             // equatorial radius (metres)
-    double k2;               // tidal Love number (deformability; 0–1)
-    double tidal_Q;          // tidal quality factor (higher = less dissipation)
+    double massSolar;
+    double visualRadius;
+    double orbitalRadiusAU;
+    double axialTiltDeg;
+    double spinPeriodDays;
+    double J2;
+    double R_eq;
+    double k2;
+    double tidal_Q;
+    double atm_rho0;
+    double atm_scale_height;
+    double eccentricity;
 };
 const Preset PRESETS[] = {
-    //           name       mass      visR   orbAU   tilt(°)  period(d)    J2         R_eq(m)      k2       Q
-    { "Sun",     1.0,       40.0,   0.0,     7.25,   25.380,  2.20e-7,  6.957e8,  0.028,  1.07e6 },
-    { "Jupiter", 9.54e-4,   28.0,   5.203,   3.13,    0.4135, 1.474e-2, 7.149e7,  0.379,  3.56e4 },
-    { "Saturn",  2.84e-4,   23.0,   9.537,  26.73,    0.4440, 1.630e-2, 6.027e7,  0.341,  1.68e4 },
-    { "Neptune", 5.15e-5,   16.0,  30.069,  28.32,    0.6713, 3.411e-3, 2.476e7,  0.127,  9000.0 },
-    { "Uranus",  4.37e-5,   15.0,  19.191,  97.77,   -0.7183, 3.343e-3, 2.556e7,  0.104,  8000.0 },
-    { "Earth",   3.00e-6,   12.0,   1.000,  23.44,    0.9973, 1.083e-3, 6.378e6,  0.299,    12.0 },
-    { "Venus",   2.45e-6,   11.0,   0.723, 177.36, -243.025,  4.458e-6, 6.052e6,  0.295,    17.0 },
-    { "Mars",    3.21e-7,    9.0,   1.524,  25.19,    1.026,  1.956e-3, 3.396e6,  0.169,    80.0 },
-    { "Mercury", 1.65e-7,    7.0,   0.387,   0.034,  58.646,  6.000e-5, 2.440e6,  0.100,    50.0 },
-    { "Custom",  0.0,        0.0,   0.0,    23.0,     1.0,    1.000e-3, 6.400e6,  0.300,   100.0 },
+    //                   name   mass     visR  orbAU   tilt   period      J2        R_eq      k2       Q       rho0   scaleH    ecc
+    { "Sun",          1.0,       40.0,   0.0,   7.25,  25.380, 2.20e-7,  6.957e8,  0.028,  1.07e6,  0.0,    0.0,    0.0    },
+    { "Jupiter",      9.54e-4,   28.0,   5.203,  3.13,   0.4135,1.474e-2, 7.149e7,  0.379,  3.56e4,  0.0,    0.0,    0.049  },
+    { "Saturn",       2.84e-4,   23.0,   9.537, 26.73,   0.4440,1.630e-2, 6.027e7,  0.341,  1.68e4,  0.0,    0.0,    0.057  },
+    { "Neptune",      5.15e-5,   16.0,  30.069, 28.32,   0.6713,3.411e-3, 2.476e7,  0.127,  9000.0,  0.0,    0.0,    0.010  },
+    { "Uranus",       4.37e-5,   15.0,  19.191, 97.77,  -0.7183,3.343e-3, 2.556e7,  0.104,  8000.0,  0.0,    0.0,    0.046  },
+    { "Earth",        3.00e-6,   12.0,   1.000, 23.44,   0.9973,1.083e-3, 6.378e6,  0.299,    12.0,  1.225,  8500.0, 0.017  },
+    { "Venus",        2.45e-6,   11.0,   0.723,177.36,-243.025, 4.458e-6, 6.052e6,  0.295,    17.0,  65.0,  15900.0, 0.007  },
+    { "Mars",         3.21e-7,    9.0,   1.524, 25.19,   1.026, 1.956e-3, 3.396e6,  0.169,    80.0,  0.0,    0.0,    0.093  },
+    { "Mercury",      1.65e-7,    7.0,   0.387,  0.034, 58.646, 6.000e-5, 2.440e6,  0.100,    50.0,  0.0,    0.0,    0.206  },
+    { "Neutron Star", 1.4,       14.0,   0.0,    0.0,    0.0233, 0.0,      1.0e4,   0.05,   1.0e13,  0.0,    0.0,    0.0    },
+    { "Black Hole",  10.0,       18.0,   0.0,    0.0,    0.0,    0.0,      3.0e5,   0.0,    1.0e15,  0.0,    0.0,    0.0    },
+    { "Custom",       0.0,        0.0,   0.0,   23.0,    1.0,   1.000e-3, 6.400e6,  0.300,   100.0,  0.0,    0.0,    0.0    },
 };
-const int NUM_PRESETS = 10;
+const int NUM_PRESETS = 12;
 
-//--- Fixed body colors for up to 8 bodies ---
 const glm::vec3 BODY_COLORS[8] = {
-    glm::vec3(1.0f, 1.0f, 1.0f),   // white
-    glm::vec3(1.0f, 0.2f, 0.2f),   // red
-    glm::vec3(0.2f, 0.8f, 1.0f),   // cyan
-    glm::vec3(1.0f, 0.8f, 0.1f),   // yellow
-    glm::vec3(0.2f, 1.0f, 0.3f),   // green
-    glm::vec3(1.0f, 0.5f, 0.1f),   // orange
-    glm::vec3(0.9f, 0.3f, 1.0f),   // purple
-    glm::vec3(0.4f, 0.8f, 1.0f),   // light blue
+    glm::vec3(1.0f, 1.0f, 1.0f),   
+    glm::vec3(1.0f, 0.2f, 0.2f),   
+    glm::vec3(0.2f, 0.8f, 1.0f),   
+    glm::vec3(1.0f, 0.8f, 0.1f),   
+    glm::vec3(0.2f, 1.0f, 0.3f),   
+    glm::vec3(1.0f, 0.5f, 0.1f),   
+    glm::vec3(0.9f, 0.3f, 1.0f),   
+    glm::vec3(0.4f, 0.8f, 1.0f),   
 };
 
-//--- Generate random star field ---
 std::vector<float> generateStars(int count) {
     std::mt19937 rng(42);
     std::uniform_real_distribution<float> dist(-300.0f, 300.0f);
@@ -240,24 +240,21 @@ std::vector<float> generateStars(int count) {
     return stars;
 }
 
-//--- Project a 3D world position to 2D screen pixels ---
 glm::vec2 worldToScreen(glm::vec3 worldPos, glm::mat4 MVP, int width, int height) {
     glm::vec4 clip = MVP * glm::vec4(worldPos, 1.0f);
     glm::vec3 ndc  = glm::vec3(clip) / clip.w;
     return glm::vec2(
         (ndc.x + 1.0f) * 0.5f * width,
-        (1.0f - ndc.y) * 0.5f * height   // flip Y — screen Y grows downward
+        (1.0f - ndc.y) * 0.5f * height   
     );
 }
 
-//--- Format a double to N decimal places as a string ---
 std::string fmt(double val, int decimals = 2) {
     std::ostringstream ss;
     ss << std::fixed << std::setprecision(decimals) << val;
     return ss.str();
 }
 
-//--- Format a double in scientific notation (e.g. 3.56e+22) ---
 std::string fmtSci(double val) {
     if (val <= 0.0) return "0.00e+0";
     int exp = (int)std::floor(std::log10(val));
@@ -269,7 +266,7 @@ std::string fmtSci(double val) {
 }
 
 int main() {
-    //--- Init GLFW ---
+    
     if (!glfwInit()) {
         std::cout << "Failed to initialize GLFW\n";
         return -1;
@@ -303,7 +300,7 @@ int main() {
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 
-    //--- Compile shaders ---
+    
     unsigned int planetShader = compileShader(planetVertSrc, planetFragSrc);
     unsigned int simpleShader = compileShader(simpleVertSrc, simpleFragSrc);
 
@@ -315,19 +312,19 @@ int main() {
     int sMVP     = glGetUniformLocation(simpleShader, "MVP");
     int sColor   = glGetUniformLocation(simpleShader, "color");
 
-    //--- Init ImGui ---
+    
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
     ImGuiIO& io = ImGui::GetIO();
     io.FontGlobalScale = 1.4f;
     ImGui::StyleColorsDark();
-    // Tweak style for a cleaner dark look
+    
     ImGuiStyle& style = ImGui::GetStyle();
     style.WindowRounding    = 8.0f;
     style.FrameRounding     = 4.0f;
     style.ItemSpacing       = ImVec2(10, 8);
     style.WindowPadding     = ImVec2(18, 16);
-    ImGui_ImplGlfw_InitForOpenGL(window, false);  // we install callbacks manually
+    ImGui_ImplGlfw_InitForOpenGL(window, false);  
     ImGui_ImplOpenGL3_Init("#version 460");
 
     glfwSetKeyCallback(window, keyCallback);
@@ -336,17 +333,17 @@ int main() {
     glfwSetCursorPosCallback(window, cursorPosCallback);
     glfwSetScrollCallback(window, scrollCallback);
 
-    //--- Setup state ---
+    
     int  setupNumBodies = 2;
-    int  selectedPreset[8] = {0, 5, 0, 0, 0, 0, 0, 0};  // default: Sun + Earth
+    int  selectedPreset[8] = {0, 5, 0, 0, 0, 0, 0, 0};  
     double customMass[8]   = {1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0};
     bool launched = false;
 
-    // Build flat name list for ImGui::Combo
+    
     const char* presetNames[NUM_PRESETS];
     for (int i = 0; i < NUM_PRESETS; i++) presetNames[i] = PRESETS[i].name;
 
-    //--- Setup render loop ---
+    
     while (!glfwWindowShouldClose(window) && !launched) {
         glfwPollEvents();
         ImGui_ImplOpenGL3_NewFrame();
@@ -428,7 +425,7 @@ int main() {
         return 0;
     }
 
-    //--- Populate bodies from setup choices ---
+    
     numBodies = setupNumBodies;
     std::vector<double> massSolars(numBodies);
     std::vector<double> radii(numBodies);
@@ -457,8 +454,8 @@ int main() {
         bodies[i].ax = bodies[i].ay = bodies[i].az = 0.0;
         bodies[i].vx = bodies[i].vy = bodies[i].vz = 0.0;
 
-        // Spin axis: tilt the +Y axis by the preset obliquity.
-        // Azimuth is spread evenly so bodies don't all point the same way.
+        
+        
         int    choice      = selectedPreset[i];
         double tiltDeg     = PRESETS[choice].axialTiltDeg;
         double periodDays  = PRESETS[choice].spinPeriodDays;
@@ -471,11 +468,13 @@ int main() {
         bodies[i].angular_velocity = (periodDays != 0.0)
             ? 2.0 * 3.14159265358979323846 / (periodDays * 86400.0) : 0.0;
 
-        bodies[i].J2       = PRESETS[choice].J2;
-        bodies[i].R_eq     = PRESETS[choice].R_eq;
-        bodies[i].k2       = PRESETS[choice].k2;
-        bodies[i].tidal_Q  = PRESETS[choice].tidal_Q;
-        // Custom bodies: scale R_eq by cube-root of mass relative to Earth
+        bodies[i].J2               = PRESETS[choice].J2;
+        bodies[i].R_eq             = PRESETS[choice].R_eq;
+        bodies[i].k2               = PRESETS[choice].k2;
+        bodies[i].tidal_Q          = PRESETS[choice].tidal_Q;
+        bodies[i].atm_rho0         = PRESETS[choice].atm_rho0;
+        bodies[i].atm_scale_height = PRESETS[choice].atm_scale_height;
+
         if (choice == NUM_PRESETS - 1) {
             bodies[i].R_eq = 6.378e6 * std::cbrt(massSolars[i] / 3.00e-6);
         }
@@ -484,17 +483,31 @@ int main() {
     double total_mass = 0.0;
     for (auto& b : bodies) total_mass += b.mass;
 
-    // Place each body at its own orbital radius, evenly spaced in angle on a tilted plane
+    
     const double PI   = 3.14159265358979323846;
-    const double tilt = PI / 6.0;  // 30-degree tilt so 3/4 bodies have visible z-axis motion
-    for (int i = 0; i < numBodies; i++) {
-        double angle = 2.0 * PI * i / numBodies;
-        bodies[i].x = orbitalRadii[i] * std::cos(angle);
-        bodies[i].y = orbitalRadii[i] * std::sin(angle) * std::cos(tilt);
-        bodies[i].z = orbitalRadii[i] * std::sin(angle) * std::sin(tilt);
+    const double tilt = PI / 6.0;
+
+    double centralMass = total_mass;
+    {
+        double best = 0.0;
+        for (int i = 0; i < numBodies; i++) {
+            if (orbitalRadii[i] < 0.001 * AU && bodies[i].mass > best) {
+                best = bodies[i].mass;
+                centralMass = bodies[i].mass;
+            }
+        }
     }
 
-    // Shift positions so center of mass is at origin
+    for (int i = 0; i < numBodies; i++) {
+        double angle = 2.0 * PI * i / numBodies;
+        double ecc   = PRESETS[selectedPreset[i]].eccentricity;
+        double a     = orbitalRadii[i];
+        double r_peri = a * (1.0 - ecc);
+        bodies[i].x = r_peri * std::cos(angle);
+        bodies[i].y = r_peri * std::sin(angle) * std::cos(tilt);
+        bodies[i].z = r_peri * std::sin(angle) * std::sin(tilt);
+    }
+
     double comX = 0.0, comY = 0.0, comZ = 0.0;
     for (auto& b : bodies) {
         comX += b.mass * b.x;
@@ -504,23 +517,24 @@ int main() {
     comX /= total_mass; comY /= total_mass; comZ /= total_mass;
     for (auto& b : bodies) { b.x -= comX; b.y -= comY; b.z -= comZ; }
 
-    // Give each body a circular orbit velocity based on its actual distance from COM
     for (int i = 0; i < numBodies; i++) {
-        if (orbitalRadii[i] < 0.001 * AU) continue;  // skip bodies placed at origin (e.g. Sun)
-        double r = std::sqrt(bodies[i].x*bodies[i].x + bodies[i].y*bodies[i].y + bodies[i].z*bodies[i].z);
-        double speed = std::sqrt(G * total_mass / r);
+        if (orbitalRadii[i] < 0.001 * AU) continue;
         double angle = 2.0 * PI * i / numBodies;
-        bodies[i].vx = -speed * std::sin(angle);
-        bodies[i].vy =  speed * std::cos(angle) * std::cos(tilt);
-        bodies[i].vz =  speed * std::cos(angle) * std::sin(tilt);
+        double ecc   = PRESETS[selectedPreset[i]].eccentricity;
+        double a     = orbitalRadii[i];
+        double r_peri = a * (1.0 - ecc);
+        double v_peri = std::sqrt(G * centralMass * (1.0 + ecc) / r_peri);
+        bodies[i].vx = -v_peri * std::sin(angle);
+        bodies[i].vy =  v_peri * std::cos(angle) * std::cos(tilt);
+        bodies[i].vz =  v_peri * std::cos(angle) * std::sin(tilt);
     }
 
-    // Correct velocities so total momentum = 0 (COM stays fixed at origin)
+    
     double pvx = 0.0, pvy = 0.0, pvz = 0.0;
     for (auto& b : bodies) { pvx += b.mass * b.vx; pvy += b.mass * b.vy; pvz += b.mass * b.vz; }
     for (auto& b : bodies) { b.vx -= pvx/total_mass; b.vy -= pvy/total_mass; b.vz -= pvz/total_mass; }
 
-    // Compute initial forces (not strictly needed for Yoshida ABA, but keeps accelerations valid for display)
+    
     for (int i = 0; i < numBodies; i++)
         for (int j = i+1; j < numBodies; j++)
             computeGravity(bodies[i], bodies[j], G, C_LIGHT);
@@ -530,7 +544,33 @@ int main() {
     std::vector<double>      radiiInitial      = radii;
     std::vector<std::string> bodyNamesInitial  = bodyNames;
 
-    //--- Planet VAO/VBO ---
+    {
+        double E_init = 0.0;
+        for (int i = 0; i < (int)bodies.size(); i++) {
+            double vsq = bodies[i].vx*bodies[i].vx + bodies[i].vy*bodies[i].vy + bodies[i].vz*bodies[i].vz;
+            E_init += 0.5 * bodies[i].mass * vsq;
+        }
+        for (int i = 0; i < (int)bodies.size(); i++) {
+            for (int j = i+1; j < (int)bodies.size(); j++) {
+                double ddx = bodies[j].x - bodies[i].x;
+                double ddy = bodies[j].y - bodies[i].y;
+                double ddz = bodies[j].z - bodies[i].z;
+                double rr  = std::sqrt(ddx*ddx + ddy*ddy + ddz*ddz);
+                if (rr > 0.0) E_init -= G * bodies[i].mass * bodies[j].mass / rr;
+            }
+        }
+        E0 = E_init;
+
+        double Lx = 0.0, Ly = 0.0, Lz = 0.0;
+        for (int i = 0; i < (int)bodies.size(); i++) {
+            Lx += bodies[i].mass * (bodies[i].y * bodies[i].vz - bodies[i].z * bodies[i].vy);
+            Ly += bodies[i].mass * (bodies[i].z * bodies[i].vx - bodies[i].x * bodies[i].vz);
+            Lz += bodies[i].mass * (bodies[i].x * bodies[i].vy - bodies[i].y * bodies[i].vx);
+        }
+        L0 = std::sqrt(Lx*Lx + Ly*Ly + Lz*Lz);
+    }
+
+    
     unsigned int planetVAO, planetVBO;
     glGenVertexArrays(1, &planetVAO);
     glGenBuffers(1, &planetVBO);
@@ -540,7 +580,7 @@ int main() {
     glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), (void*)0);
     glEnableVertexAttribArray(0);
 
-    //--- Trail VAOs/VBOs — one set per body (up to 8) ---
+    
     unsigned int trailVAO[8], trailVBO[8];
     glGenVertexArrays(8, trailVAO);
     glGenBuffers(8, trailVBO);
@@ -552,7 +592,7 @@ int main() {
         glEnableVertexAttribArray(0);
     }
 
-    //--- Stars VAO/VBO ---
+    
     auto starData = generateStars(2000);
     unsigned int starVAO, starVBO;
     glGenVertexArrays(1, &starVAO); glGenBuffers(1, &starVBO);
@@ -562,29 +602,29 @@ int main() {
     glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), (void*)0);
     glEnableVertexAttribArray(0);
 
-    //--- Grid VAO/VBO ---
+    
     std::vector<float> gridVertices;
     int   gridSize   = 60;
     float gridStep   = 1.0f;
     float gridExtent = gridSize * gridStep;
     for (int i = -gridSize; i <= gridSize; i++) {
         float pos  = i * gridStep;
-        // Floor grid (XZ plane at y=0)
+        
         gridVertices.insert(gridVertices.end(), { pos, 0.0f, -gridExtent });
         gridVertices.insert(gridVertices.end(), { pos, 0.0f,  gridExtent });
         gridVertices.insert(gridVertices.end(), { -gridExtent, 0.0f, pos });
         gridVertices.insert(gridVertices.end(), {  gridExtent, 0.0f, pos });
-        // Back wall (XY plane at z=-gridExtent) — vertical lines go above AND below
+        
         gridVertices.insert(gridVertices.end(), { pos, -gridExtent, -gridExtent });
         gridVertices.insert(gridVertices.end(), { pos,  gridExtent, -gridExtent });
-        // Back wall — horizontal lines
+        
         float ypos = i * gridStep;
         gridVertices.insert(gridVertices.end(), { -gridExtent, ypos, -gridExtent });
         gridVertices.insert(gridVertices.end(), {  gridExtent, ypos, -gridExtent });
-        // Left wall (YZ plane at x=-gridExtent) — vertical lines go above AND below
+        
         gridVertices.insert(gridVertices.end(), { -gridExtent, -gridExtent, pos });
         gridVertices.insert(gridVertices.end(), { -gridExtent,  gridExtent, pos });
-        // Left wall — horizontal lines
+        
         gridVertices.insert(gridVertices.end(), { -gridExtent, ypos, -gridExtent });
         gridVertices.insert(gridVertices.end(), { -gridExtent, ypos,  gridExtent });
     }
@@ -597,8 +637,8 @@ int main() {
     glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), (void*)0);
     glEnableVertexAttribArray(0);
 
-    //--- Force arrow VAO/VBO — reused each frame for 3D force vectors ---
-    // Each arrow = shaft + 2 arrowhead lines = 6 vertices; max 8*7/2 = 28 pairs * 2 arrows = 56 arrows
+    
+    
     unsigned int forceVAO, forceVBO;
     glGenVertexArrays(1, &forceVAO); glGenBuffers(1, &forceVBO);
     glBindVertexArray(forceVAO);
@@ -607,7 +647,7 @@ int main() {
     glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), (void*)0);
     glEnableVertexAttribArray(0);
 
-    //--- Spin VAO/VBO — axis line (2 pts) + equatorial ring (up to 50 pts) per body ---
+    
     unsigned int spinVAO, spinVBO;
     glGenVertexArrays(1, &spinVAO); glGenBuffers(1, &spinVBO);
     glBindVertexArray(spinVAO);
@@ -616,8 +656,8 @@ int main() {
     glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), (void*)0);
     glEnableVertexAttribArray(0);
 
-    //--- Lagrange VAO/VBO — "+" cross markers; each cross = 4 line segments = 8 vertices ---
-    // Max pairs: 8*7/2 = 28; 5 points each; 2 cross lines each; 4 vertices each = 28*5*2*4 = 1120 vertices
+    
+    
     unsigned int lagrangeVAO, lagrangeVBO;
     glGenVertexArrays(1, &lagrangeVAO); glGenBuffers(1, &lagrangeVBO);
     glBindVertexArray(lagrangeVAO);
@@ -626,7 +666,14 @@ int main() {
     glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), (void*)0);
     glEnableVertexAttribArray(0);
 
-    //--- UI VAO/VBO — reused each frame for panel backgrounds, stems, and text quads ---
+    unsigned int comVAO, comVBO;
+    glGenVertexArrays(1, &comVAO); glGenBuffers(1, &comVBO);
+    glBindVertexArray(comVAO);
+    glBindBuffer(GL_ARRAY_BUFFER, comVBO);
+    glBufferData(GL_ARRAY_BUFFER, 18 * 3 * sizeof(float), nullptr, GL_DYNAMIC_DRAW);
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), (void*)0);
+    glEnableVertexAttribArray(0);
+
     unsigned int uiVAO, uiVBO;
     glGenVertexArrays(1, &uiVAO); glGenBuffers(1, &uiVBO);
     glBindVertexArray(uiVAO);
@@ -635,7 +682,7 @@ int main() {
     glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), (void*)0);
     glEnableVertexAttribArray(0);
 
-    //--- UI helper lambdas ---
+    
     auto drawRect = [&](float x, float y, float w, float h, glm::vec4 col) {
         float v[] = {
             x,   y,   0,  x+w, y,   0,  x+w, y+h, 0,
@@ -657,16 +704,16 @@ int main() {
         glDrawArrays(GL_LINES, 0, 2);
     };
 
-    // Draw text using stb_easy_font — converts string to filled quads
+    
     auto drawText = [&](float x, float y, float scale, const std::string& text, glm::vec4 col) {
         static char buf[99999];
         int nq = stb_easy_font_print(0, 0, (char*)text.c_str(), nullptr, buf, sizeof(buf));
 
-        // stb_easy_font vertex layout: float x, float y, float z, 4 bytes color (16 bytes total)
+        
         struct SVertex { float x, y, z; unsigned char r, g, b, a; };
         SVertex* sv = (SVertex*)buf;
 
-        // Convert quads → triangles and apply position + scale
+        
         std::vector<float> pts;
         pts.reserve(nq * 18);
         for (int q = 0; q < nq; q++) {
@@ -685,14 +732,14 @@ int main() {
         glDrawArrays(GL_TRIANGLES, 0, nq * 6);
     };
 
-    //--- Fixed projection matrix ---
+    
     glm::mat4 projection = glm::perspective(
         glm::radians(45.0f),
         (float)screenW / (float)screenH,
         0.1f, 1000.0f
     );
 
-    //--- Render loop ---
+    
     while (!glfwWindowShouldClose(window)) {
         glfwPollEvents();
         ImGui_ImplOpenGL3_NewFrame();
@@ -711,7 +758,7 @@ int main() {
             for (int i = 0; i < 8; i++) trails[i].clear();
         }
 
-        //--- Real-time controls panel ---
+        
         ImGui::SetNextWindowPos(ImVec2(18.0f, 18.0f), ImGuiCond_Always);
         ImGui::SetNextWindowSize(ImVec2(300.0f, 0.0f), ImGuiCond_Always);
         ImGui::SetNextWindowBgAlpha(0.80f);
@@ -720,7 +767,7 @@ int main() {
             ImGuiWindowFlags_AlwaysAutoResize |
             ImGuiWindowFlags_NoCollapse);
 
-        // Playback buttons
+        
         if (ImGui::Button(paused ? "Resume" : " Pause ", ImVec2(80, 0)))
             paused = !paused;
         ImGui::SameLine();
@@ -735,19 +782,17 @@ int main() {
         ImGui::SameLine();
         ImGui::TextDisabled("(R to reset)");
 
-        // Simulation speed
-        ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+        
+        ImGui::SetNextItemWidth(170.0f);
         ImGui::SliderInt("##spf", &STEPS_PER_FRAME, 1, 100);
-        ImGui::SameLine(0, 6);
-        ImGui::Text("Speed: %d steps/frame", STEPS_PER_FRAME);
+        ImGui::SameLine(0, 8);
+        ImGui::Text("Speed  %d\xc3\x97", STEPS_PER_FRAME);
 
-        // Toggles
-        ImGui::Checkbox("Forces (F)", &showForces);
-        ImGui::SameLine();
-        ImGui::Checkbox("Info (I)", &showPanel);
-        ImGui::SameLine();
-        ImGui::Checkbox("Spin (S)", &showSpin);
+        ImGui::Checkbox("Forces (F)",   &showForces);   ImGui::SameLine(152);
+        ImGui::Checkbox("Info (I)",     &showPanel);
+        ImGui::Checkbox("Spin (S)",     &showSpin);     ImGui::SameLine(152);
         ImGui::Checkbox("Lagrange (L)", &showLagrange);
+        ImGui::Checkbox("COM (B)",      &showCOM);
 
         ImGui::Separator();
         ImGui::TextDisabled("Body masses (solar masses)");
@@ -778,48 +823,66 @@ int main() {
 
         ImGui::End();
 
-        // Yoshida 4th-order symplectic integrator (ABA composition of 3 leapfrog steps)
-        // 3 force evaluations per step; conserves energy far better than Verlet long-term
+        
+        
         if (!paused) {
-            // Yoshida (1990) coefficients
+            
             static const double w1 = 1.0 / (2.0 - std::cbrt(2.0));
             static const double w0 = 1.0 - 2.0 * w1;
-            static const double c1 = w1 / 2.0;         // = c4 by symmetry
-            static const double c2 = (w0 + w1) / 2.0;  // = c3 by symmetry
-            static const double d1 = w1;                // = d3 by symmetry
+            static const double c1 = w1 / 2.0;         
+            static const double c2 = (w0 + w1) / 2.0;  
+            static const double d1 = w1;                
             static const double d2 = w0;
             for (int step = 0; step < STEPS_PER_FRAME; step++) {
+                double dt_step = dt;
+                {
+                    double min_scale = 1.0;
+                    for (int i = 0; i < (int)bodies.size(); i++) {
+                        for (int j = i+1; j < (int)bodies.size(); j++) {
+                            double ddx = bodies[j].x - bodies[i].x;
+                            double ddy = bodies[j].y - bodies[i].y;
+                            double ddz = bodies[j].z - bodies[i].z;
+                            double rr  = std::sqrt(ddx*ddx + ddy*ddy + ddz*ddz);
+                            double s   = rr / (0.01 * AU);
+                            if (s < min_scale) min_scale = s;
+                        }
+                    }
+                    double scale_factor = (min_scale < 1.0) ? (1.0 / std::max(min_scale, 0.001)) : 1.0;
+                    dt_step = dt / std::max(1.0, scale_factor);
+                    if (dt_step < dt / 1000.0) dt_step = dt / 1000.0;
+                    if (dt_step > dt)           dt_step = dt;
+                }
+
                 auto recomputeForces = [&]() {
                     for (auto& b : bodies) { b.ax = b.ay = b.az = 0.0; }
                     for (int i = 0; i < (int)bodies.size(); i++)
-                        for (int j = i+1; j < (int)bodies.size(); j++)
+                        for (int j = i+1; j < (int)bodies.size(); j++) {
                             computeGravity(bodies[i], bodies[j], G, C_LIGHT);
+                            computeDrag(bodies[i], bodies[j], dt_step);
+                            computeDrag(bodies[j], bodies[i], dt_step);
+                        }
                 };
 
-                // Sub-step 1: drift(c1) → forces → kick(d1)
-                for (auto& b : bodies) { b.x += b.vx*c1*dt; b.y += b.vy*c1*dt; b.z += b.vz*c1*dt; }
+                for (auto& b : bodies) { b.x += b.vx*c1*dt_step; b.y += b.vy*c1*dt_step; b.z += b.vz*c1*dt_step; }
                 recomputeForces();
-                for (auto& b : bodies) { b.vx += b.ax*d1*dt; b.vy += b.ay*d1*dt; b.vz += b.az*d1*dt; }
+                for (auto& b : bodies) { b.vx += b.ax*d1*dt_step; b.vy += b.ay*d1*dt_step; b.vz += b.az*d1*dt_step; }
 
-                // Sub-step 2: drift(c2) → forces → kick(d2)
-                for (auto& b : bodies) { b.x += b.vx*c2*dt; b.y += b.vy*c2*dt; b.z += b.vz*c2*dt; }
+                for (auto& b : bodies) { b.x += b.vx*c2*dt_step; b.y += b.vy*c2*dt_step; b.z += b.vz*c2*dt_step; }
                 recomputeForces();
-                for (auto& b : bodies) { b.vx += b.ax*d2*dt; b.vy += b.ay*d2*dt; b.vz += b.az*d2*dt; }
+                for (auto& b : bodies) { b.vx += b.ax*d2*dt_step; b.vy += b.ay*d2*dt_step; b.vz += b.az*d2*dt_step; }
 
-                // Sub-step 3: drift(c3=c2) → forces → kick(d3=d1)
-                for (auto& b : bodies) { b.x += b.vx*c2*dt; b.y += b.vy*c2*dt; b.z += b.vz*c2*dt; }
+                for (auto& b : bodies) { b.x += b.vx*c2*dt_step; b.y += b.vy*c2*dt_step; b.z += b.vz*c2*dt_step; }
                 recomputeForces();
-                for (auto& b : bodies) { b.vx += b.ax*d1*dt; b.vy += b.ay*d1*dt; b.vz += b.az*d1*dt; }
+                for (auto& b : bodies) { b.vx += b.ax*d1*dt_step; b.vy += b.ay*d1*dt_step; b.vz += b.az*d1*dt_step; }
 
-                // Final drift(c4=c1)
-                for (auto& b : bodies) { b.x += b.vx*c1*dt; b.y += b.vy*c1*dt; b.z += b.vz*c1*dt; }
+                for (auto& b : bodies) { b.x += b.vx*c1*dt_step; b.y += b.vy*c1*dt_step; b.z += b.vz*c1*dt_step; }
 
-                // Collision detection and response.
-                // Regimes (based on relative speed vs mutual escape velocity, and impact parameter):
-                //   hit-and-run     — grazing, both survive with elastic-ish bounce
-                //   perfect merge   — slow/head-on, bodies combine (original behaviour)
-                //   partial accretion — medium energy, large remnant + small ejecta fragment
-                //   catastrophic    — high energy, two comparable fragments
+                
+                
+                
+                
+                
+                
                 for (int i = 0; i < (int)bodies.size(); i++) {
                     for (int j = i+1; j < (int)bodies.size(); j++) {
                         double rx = bodies[i].x - bodies[j].x;
@@ -831,17 +894,17 @@ int main() {
                         double mi = bodies[i].mass, mj = bodies[j].mass;
                         double mTot = mi + mj;
 
-                        // Relative velocity (i relative to j)
+                        
                         double dvx = bodies[i].vx - bodies[j].vx;
                         double dvy = bodies[i].vy - bodies[j].vy;
                         double dvz = bodies[i].vz - bodies[j].vz;
                         double vRel = std::sqrt(dvx*dvx + dvy*dvy + dvz*dvz);
 
-                        // Mutual escape velocity at collision distance
+                        
                         double vEsc = std::sqrt(2.0 * G * mTot / std::max(dist, 1e6));
 
-                        // Impact parameter ratio ξ ∈ [0,1]: 0 = head-on, 1 = grazing
-                        // b = |r × v̂_rel|,  ξ = b / dist
+                        
+                        
                         double cpx = ry*dvz - rz*dvy;
                         double cpy = rz*dvx - rx*dvz;
                         double cpz = rx*dvy - ry*dvx;
@@ -849,7 +912,7 @@ int main() {
                             ? std::sqrt(cpx*cpx + cpy*cpy + cpz*cpz) / vRel : 0.0;
                         double xi = std::min(bParam / dist, 1.0);
 
-                        // COM position and velocity (conserved in all regimes)
+                        
                         double comX  = (mi*bodies[i].x  + mj*bodies[j].x)  / mTot;
                         double comY  = (mi*bodies[i].y  + mj*bodies[j].y)  / mTot;
                         double comZ  = (mi*bodies[i].z  + mj*bodies[j].z)  / mTot;
@@ -857,19 +920,19 @@ int main() {
                         double comVY = (mi*bodies[i].vy + mj*bodies[j].vy) / mTot;
                         double comVZ = (mi*bodies[i].vz + mj*bodies[j].vz) / mTot;
 
-                        // Collision normal: unit vector from j toward i
+                        
                         double nx = rx / dist, ny = ry / dist, nz = rz / dist;
 
-                        // Classify regime
+                        
                         bool hitAndRun    = (xi > 0.65 && vRel < 2.5 * vEsc);
                         bool catastrophic = (vRel >= 3.0 * vEsc);
                         bool partial      = (!hitAndRun && !catastrophic && vRel >= 1.5 * vEsc);
-                        // else: perfect merge
+                        
 
-                        // ---- HIT AND RUN: grazing encounter, both bodies survive ----
+                        
                         if (hitAndRun) {
                             double vDotN = dvx*nx + dvy*ny + dvz*nz;
-                            if (vDotN < 0.0) {  // only apply impulse when approaching
+                            if (vDotN < 0.0) {  
                                 double e = glm::clamp(0.3 + 0.5 * xi, 0.0, 0.85);
                                 double J = -(1.0 + e) * vDotN / (1.0/mi + 1.0/mj);
                                 bodies[i].vx += J/mi * nx;
@@ -879,26 +942,26 @@ int main() {
                                 bodies[j].vy -= J/mj * ny;
                                 bodies[j].vz -= J/mj * nz;
                             }
-                            continue;  // no bodies removed or added
+                            continue;  
                         }
 
-                        // ---- DETERMINE FRAGMENT MASS SPLIT ----
+                        
                         double r3Total   = std::pow(radii[i], 3.0) + std::pow(radii[j], 3.0);
                         bool   spawnFrag = (numBodies < 8) && (catastrophic || partial);
 
                         double frag1Frac = 1.0;
                         if (catastrophic && spawnFrag) {
-                            frag1Frac = 0.50 + 0.08 * xi;      // 50–58 %, heavier piece
+                            frag1Frac = 0.50 + 0.08 * xi;      
                         } else if (partial && spawnFrag) {
                             double er = glm::clamp(vRel / vEsc, 1.5, 3.0);
-                            frag1Frac = 1.0 - 0.20 * (er - 1.5) / 1.5;  // 80 %→60 % as energy rises
+                            frag1Frac = 1.0 - 0.20 * (er - 1.5) / 1.5;  
                         }
                         double frag1Mass = mTot * frag1Frac;
                         double frag2Mass = mTot * (1.0 - frag1Frac);
 
-                        // ---- EJECTION VELOCITY IN COM FRAME ----
-                        // v1 = comV + (m2/M)*vEject*n̂  (conserves momentum by construction)
-                        // v2 = comV - (m1/M)*vEject*n̂
+                        
+                        
+                        
                         double vEject = 0.0;
                         if (spawnFrag) {
                             vEject = catastrophic
@@ -912,14 +975,14 @@ int main() {
                         double v2y = comVY - (frag1Mass/mTot) * vEject * ny;
                         double v2z = comVZ - (frag1Mass/mTot) * vEject * nz;
 
-                        // Fragment radii: split total volume proportional to mass
+                        
                         double r1new = std::cbrt(r3Total * frag1Frac);
                         double r2new = std::cbrt(r3Total * (1.0 - frag1Frac));
 
-                        // Place fragments > 0.005 AU apart so they don't immediately re-collide
+                        
                         const double FRAG_SEP = 0.003 * AU;
 
-                        // ---- UPDATE BODY i (primary remnant) ----
+                        
                         std::string baseName = bodyNames[i] + "+" + bodyNames[j];
                         bodies[i].mass   = frag1Mass;
                         bodies[i].radius = r1new;
@@ -932,7 +995,7 @@ int main() {
                         radii[i]      = r1new;
                         bodyNames[i]  = baseName;
 
-                        // ---- ERASE BODY j, SHIFT TRAILS DOWN ----
+                        
                         bodies.erase(bodies.begin() + j);
                         for (int k = j; k < numBodies - 1; k++) trails[k] = std::move(trails[k+1]);
                         trails[numBodies - 1].clear();
@@ -941,7 +1004,7 @@ int main() {
                         bodyNames.erase(bodyNames.begin() + j);
                         numBodies--;
 
-                        // ---- SPAWN DEBRIS FRAGMENT AT SLOT j (if fragmenting) ----
+                        
                         if (spawnFrag) {
                             Body frag{};
                             frag.mass   = frag2Mass;
@@ -952,7 +1015,7 @@ int main() {
                             frag.vx = v2x; frag.vy = v2y; frag.vz = v2z;
 
                             bodies.insert(bodies.begin() + j, frag);
-                            // Shift trails up to open slot j
+                            
                             for (int k = numBodies; k > j; k--) trails[k] = std::move(trails[k-1]);
                             trails[j].clear();
                             massSolars.insert(massSolars.begin() + j, frag2Mass / SOLAR_MASS);
@@ -960,21 +1023,20 @@ int main() {
                             bodyNames.insert(bodyNames.begin() + j,
                                 catastrophic ? "Debris" : "Ejecta");
                             numBodies++;
-                            // Don't decrement j: loop's j++ will advance past the new fragment
+                            
                         } else {
-                            j--;  // re-examine what's now at position j (was j+1 before erase)
+                            j--;  
                         }
                     }
                 }
-            }
-            // Tidal spin-orbit coupling (once per full dt step, outside Yoshida sub-steps)
-            for (int i = 0; i < (int)bodies.size(); i++)
-                for (int j = i+1; j < (int)bodies.size(); j++)
-                    computeTides(bodies[i], bodies[j], G, dt);
 
-            // Advance rotation phase
-            for (int i = 0; i < numBodies; i++)
-                bodies[i].rotation_angle += bodies[i].angular_velocity * dt;
+                for (int i = 0; i < (int)bodies.size(); i++)
+                    for (int j = i+1; j < (int)bodies.size(); j++)
+                        computeTides(bodies[i], bodies[j], G, dt_step);
+
+                for (int i = 0; i < numBodies; i++)
+                    bodies[i].rotation_angle += bodies[i].angular_velocity * dt_step;
+            }
 
             float s = (float)RENDER_SCALE;
             for (int i = 0; i < numBodies; i++) {
@@ -1003,7 +1065,7 @@ int main() {
         glBindVertexArray(starVAO);
         glDrawArrays(GL_POINTS, 0, (int)starData.size() / 3);
 
-        glUniform4f(sColor, 0.05f, 0.25f, 0.45f, 0.6f);  // steel blue grid
+        glUniform4f(sColor, 0.05f, 0.25f, 0.45f, 0.6f);  
         glBindVertexArray(gridVAO);
         glDrawArrays(GL_LINES, 0, (int)gridVertices.size() / 3);
 
@@ -1020,7 +1082,7 @@ int main() {
             glDrawArrays(GL_LINE_STRIP, 0, (int)trails[i].size());
         }
 
-        // Draw planets (glow pass then solid pass) for each body
+        
         glUseProgram(planetShader);
         glUniformMatrix4fv(pMVP, 1, GL_FALSE, glm::value_ptr(MVP));
         glUniform1f(pCamDist, camDist);
@@ -1036,15 +1098,15 @@ int main() {
             glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(pos), pos);
             glm::vec3 col = BODY_COLORS[i];
             glUniform3f(pColor, col.r, col.g, col.b);
-            glUniform1f(pRadius, (float)radii[i] * 3.0f);  // glow pass
+            glUniform1f(pRadius, (float)radii[i] * 3.0f);  
             glUniform1f(pAlpha, 0.12f);
             glDrawArrays(GL_POINTS, 0, 1);
-            glUniform1f(pRadius, (float)radii[i]);          // solid pass
+            glUniform1f(pRadius, (float)radii[i]);          
             glUniform1f(pAlpha, 1.0f);
             glDrawArrays(GL_POINTS, 0, 1);
         }
 
-        //--- Spin axes and equatorial rings ---
+        
         if (showSpin) {
             glUseProgram(simpleShader);
             glUniformMatrix4fv(sMVP, 1, GL_FALSE, glm::value_ptr(MVP));
@@ -1059,7 +1121,7 @@ int main() {
                 float cy = (float)(bodies[i].y * RENDER_SCALE);
                 float cz = (float)(bodies[i].z * RENDER_SCALE);
 
-                // World-space half-length of axis line, scaled to match visual body size
+                
                 float halfLen  = (float)radii[i] * 0.005f * camDist;
                 float ringR    = halfLen * 0.75f;
 
@@ -1068,7 +1130,7 @@ int main() {
                     (float)bodies[i].spin_ay,
                     (float)bodies[i].spin_az));
 
-                // ---- Axis line ----
+                
                 float axPts[6] = {
                     cx - axis.x*halfLen, cy - axis.y*halfLen, cz - axis.z*halfLen,
                     cx + axis.x*halfLen, cy + axis.y*halfLen, cz + axis.z*halfLen,
@@ -1077,13 +1139,13 @@ int main() {
                 glUniform4f(sColor, col.r, col.g, col.b, 0.9f);
                 glDrawArrays(GL_LINES, 0, 2);
 
-                // ---- Equatorial ring ----
-                // Build two orthonormal vectors in the equatorial plane
+                
+                
                 glm::vec3 tmp = (std::abs(axis.y) < 0.9f) ? glm::vec3(0,1,0) : glm::vec3(1,0,0);
                 glm::vec3 u   = glm::normalize(glm::cross(axis, tmp));
                 glm::vec3 v   = glm::cross(axis, u);
 
-                // Rotate u/v by the current rotation_angle so the ring marker tracks the spin
+                
                 float phi = (float)bodies[i].rotation_angle;
                 glm::vec3 uR =  std::cos(phi)*u + std::sin(phi)*v;
                 glm::vec3 vR = -std::sin(phi)*u + std::cos(phi)*v;
@@ -1102,12 +1164,12 @@ int main() {
             }
         }
 
-        //--- Force arrows — 3D vectors showing gravitational pull between each pair ---
+        
         if (showForces && numBodies >= 2) {
             glUseProgram(simpleShader);
             glUniformMatrix4fv(sMVP, 1, GL_FALSE, glm::value_ptr(MVP));
 
-            // Find max pairwise force for normalization
+            
             double maxF = 0.0;
             for (int i = 0; i < numBodies; i++)
                 for (int j = i+1; j < numBodies; j++) {
@@ -1125,11 +1187,11 @@ int main() {
             const float headWidth   = 0.10f;
             float s = (float)RENDER_SCALE;
 
-            // Helper: upload and draw a single arrow (shaft + 2-line arrowhead)
+            
             auto drawArrow3D = [&](glm::vec3 base, glm::vec3 dir, float len, glm::vec3 col) {
                 glm::vec3 tip = base + dir * len;
 
-                // Pick a vector not parallel to dir to construct the arrowhead plane
+                
                 glm::vec3 up   = (std::abs(dir.y) < 0.9f) ? glm::vec3(0,1,0) : glm::vec3(1,0,0);
                 glm::vec3 perp = glm::normalize(glm::cross(dir, up));
 
@@ -1138,9 +1200,9 @@ int main() {
                 glm::vec3 h2    = hBase - perp * headWidth;
 
                 float v[] = {
-                    base.x, base.y, base.z,  tip.x, tip.y, tip.z,   // shaft
-                    tip.x,  tip.y,  tip.z,   h1.x,  h1.y,  h1.z,   // head left
-                    tip.x,  tip.y,  tip.z,   h2.x,  h2.y,  h2.z,   // head right
+                    base.x, base.y, base.z,  tip.x, tip.y, tip.z,   
+                    tip.x,  tip.y,  tip.z,   h1.x,  h1.y,  h1.z,   
+                    tip.x,  tip.y,  tip.z,   h2.x,  h2.y,  h2.z,   
                 };
                 glBindVertexArray(forceVAO);
                 glBindBuffer(GL_ARRAY_BUFFER, forceVBO);
@@ -1163,17 +1225,17 @@ int main() {
                     glm::vec3 posJ = { (float)(bodies[j].x*s), (float)(bodies[j].y*s), (float)(bodies[j].z*s) };
                     glm::vec3 dirIJ = glm::normalize(posJ - posI);
 
-                    // Arrow on i pointing toward j (colored like i)
+                    
                     drawArrow3D(posI,  dirIJ, arrowLen, BODY_COLORS[i]);
-                    // Arrow on j pointing toward i (colored like j)
+                    
                     drawArrow3D(posJ, -dirIJ, arrowLen, BODY_COLORS[j]);
                 }
             }
         }
 
-        //--- Lagrange points — collinear (L1,L2,L3) and equilateral (L4,L5) for each body pair ---
+        
         if (showLagrange && numBodies >= 2) {
-            // Compute L-points and store them for 3D marker drawing + 2D label pass
+            
             struct LPoint { glm::vec3 pos; glm::vec4 color; const char* label; };
             std::vector<LPoint> lpoints;
 
@@ -1181,29 +1243,29 @@ int main() {
 
             for (int i = 0; i < numBodies; i++) {
                 for (int j = i+1; j < numBodies; j++) {
-                    // Identify primary (heavier) and secondary (lighter) for canonical L-point geometry.
-                    // L1 is between them, L2 beyond secondary, L3 beyond primary.
+                    
+                    
                     int pi = (bodies[i].mass >= bodies[j].mass) ? i : j;
                     int si = (bodies[i].mass >= bodies[j].mass) ? j : i;
 
                     double m1 = bodies[pi].mass, m2 = bodies[si].mass;
                     double mTot = m1 + m2;
-                    double q = m2 / mTot;   // mass ratio (secondary fraction)
+                    double q = m2 / mTot;   
 
-                    // Separation vector from primary to secondary (physical units)
+                    
                     double dx = bodies[si].x - bodies[pi].x;
                     double dy = bodies[si].y - bodies[pi].y;
                     double dz = bodies[si].z - bodies[pi].z;
                     double d  = std::sqrt(dx*dx + dy*dy + dz*dz);
-                    if (d < 1e6) continue;  // skip merged/coincident bodies
+                    if (d < 1e6) continue;  
 
-                    // Unit vector primary → secondary
+                    
                     glm::dvec3 rHat(dx/d, dy/d, dz/d);
 
-                    // Hill sphere radius (L1 distance from secondary / L2 offset)
+                    
                     double rHill = d * std::cbrt(q / 3.0);
 
-                    // Primary position in render-space
+                    
                     glm::vec3 pPos((float)(bodies[pi].x * s),
                                    (float)(bodies[pi].y * s),
                                    (float)(bodies[pi].z * s));
@@ -1212,17 +1274,17 @@ int main() {
                     float df = (float)(d * s);
                     float rHillF = (float)(rHill * s);
 
-                    // L1 — between primary and secondary, rHill inward from secondary
+                    
                     glm::vec3 posL1 = pPos + rHatF * (df - rHillF);
-                    // L2 — beyond secondary by rHill
+                    
                     glm::vec3 posL2 = pPos + rHatF * (df + rHillF);
-                    // L3 — behind primary, approximate: d*(1 + 5q/12) from primary opposite to secondary
+                    
                     float L3dist = (float)(d * (1.0 + 5.0*q/12.0) * s);
                     glm::vec3 posL3 = pPos - rHatF * L3dist;
 
-                    // L4/L5 — equilateral triangle vertices; ±60° from secondary around primary
-                    // Perpendicular vector in the orbital plane: cross(rHat, orbit_normal)
-                    // Use the relative velocity direction to estimate orbital plane normal
+                    
+                    
+                    
                     double rvx = bodies[si].vx - bodies[pi].vx;
                     double rvy = bodies[si].vy - bodies[pi].vy;
                     double rvz = bodies[si].vz - bodies[pi].vz;
@@ -1230,7 +1292,7 @@ int main() {
                     glm::dvec3 orbitNorm = glm::cross(rHat, rVel);
                     double oNormLen = glm::length(orbitNorm);
 
-                    // Pair color: blend of the two body colors
+                    
                     glm::vec3 pairCol = glm::mix(BODY_COLORS[pi], BODY_COLORS[si], 0.5f);
                     glm::vec4 col4(pairCol.r, pairCol.g, pairCol.b, 0.85f);
 
@@ -1240,12 +1302,12 @@ int main() {
 
                     if (oNormLen > 1e-30) {
                         glm::dvec3 nHat = orbitNorm / oNormLen;
-                        // Perpendicular unit vector in orbital plane (toward L4/L5)
+                        
                         glm::dvec3 perpHat = glm::cross(nHat, rHat);
 
-                        // L4/L5 at the same distance d from both bodies (equilateral triangle)
-                        // Position: primary + d*(cos60°*rHat ± sin60°*perpHat)
-                        // = primary + d*(0.5*rHat ± (sqrt3/2)*perpHat)
+                        
+                        
+                        
                         double sin60 = std::sqrt(3.0) / 2.0;
                         glm::dvec3 L4off = rHat * 0.5 + perpHat * sin60;
                         glm::dvec3 L5off = rHat * 0.5 - perpHat * sin60;
@@ -1265,13 +1327,13 @@ int main() {
                 }
             }
 
-            // Draw "+" cross markers in 3D world space
+            
             glUseProgram(simpleShader);
             glUniformMatrix4fv(sMVP, 1, GL_FALSE, glm::value_ptr(MVP));
             glBindVertexArray(lagrangeVAO);
             glBindBuffer(GL_ARRAY_BUFFER, lagrangeVBO);
 
-            float crossHalf = 0.12f * (camDist / 12.0f);  // scale cross size with zoom
+            float crossHalf = 0.12f * (camDist / 12.0f);  
 
             for (auto& lp : lpoints) {
                 float v[] = {
@@ -1287,23 +1349,23 @@ int main() {
                 glDrawArrays(GL_LINES, 0, 6);
             }
 
-            // Draw labels in 2D screen space
+            
             glm::mat4 ortho = glm::ortho(0.0f, (float)screenW, (float)screenH, 0.0f, -1.0f, 1.0f);
             glUniformMatrix4fv(sMVP, 1, GL_FALSE, glm::value_ptr(ortho));
 
             for (auto& lp : lpoints) {
                 glm::vec2 sp = worldToScreen(lp.pos, MVP, screenW, screenH);
-                // Skip if behind camera (w < 0 check via clip test — if off-screen, skip)
+                
                 if (sp.x < -100 || sp.x > screenW + 100 || sp.y < -100 || sp.y > screenH + 100) continue;
                 drawText(sp.x + 6.0f, sp.y - 8.0f, 1.5f, lp.label,
                     glm::vec4(lp.color.r, lp.color.g, lp.color.b, 0.9f));
             }
 
-            // Restore 3D MVP for subsequent passes
+            
             glUniformMatrix4fv(sMVP, 1, GL_FALSE, glm::value_ptr(MVP));
         }
 
-        //--- Info panel overlay (drawn in 2D screen space) ---
+        
         if (showPanel) {
             glm::mat4 ortho = glm::ortho(0.0f, (float)screenW, (float)screenH, 0.0f, -1.0f, 1.0f);
             glUseProgram(simpleShader);
@@ -1324,7 +1386,6 @@ int main() {
                     (float)(bodies[i].z * RENDER_SCALE)
                 };
 
-                glm::vec2 sp = worldToScreen(worldPos, MVP, screenW, screenH);
                 float px = panelX;
                 float py = 18.0f + i * (panelH + panelGap);
                 glm::vec3 c = BODY_COLORS[i];
@@ -1332,19 +1393,19 @@ int main() {
                 drawRect(px, py, panelW, panelH, glm::vec4(0.04f, 0.04f, 0.10f, 0.88f));
                 drawRect(px, py, 4.0f, panelH, glm::vec4(c.r, c.g, c.b, 1.0f));
 
-                // --- Real-life stats ---
+                
                 double speed_kms = std::sqrt(
                     bodies[i].vx*bodies[i].vx +
                     bodies[i].vy*bodies[i].vy +
                     bodies[i].vz*bodies[i].vz) / 1000.0;
 
-                // Distance to the nearest other body
+                
                 int other = (i == 0) ? 1 : 0;
                 double ddx = bodies[i].x - bodies[other].x;
                 double ddy = bodies[i].y - bodies[other].y;
                 double ddz = bodies[i].z - bodies[other].z;
                 double dist_AU = std::sqrt(ddx*ddx + ddy*ddy + ddz*ddz) / AU;
-                double dist_Mkm = dist_AU * AU / 1e9;  // million km
+                double dist_Mkm = dist_AU * AU / 1e9;  
 
                 float tx = px + 10.0f;
                 float ty = py + 10.0f;
@@ -1381,6 +1442,101 @@ int main() {
                     "Force : " + fmtSci(Fmag) + " N",
                     glm::vec4(0.8f, 0.65f, 1.0f, 1.0f));
             }
+        }
+
+        if (showPanel) {
+            double E_cur = 0.0;
+            for (int i = 0; i < (int)bodies.size(); i++) {
+                double vsq = bodies[i].vx*bodies[i].vx + bodies[i].vy*bodies[i].vy + bodies[i].vz*bodies[i].vz;
+                E_cur += 0.5 * bodies[i].mass * vsq;
+            }
+            for (int i = 0; i < (int)bodies.size(); i++)
+                for (int j = i+1; j < (int)bodies.size(); j++) {
+                    double ddx = bodies[j].x - bodies[i].x;
+                    double ddy = bodies[j].y - bodies[i].y;
+                    double ddz = bodies[j].z - bodies[i].z;
+                    double rr  = std::sqrt(ddx*ddx + ddy*ddy + ddz*ddz);
+                    if (rr > 0.0) E_cur -= G * bodies[i].mass * bodies[j].mass / rr;
+                }
+            double Lx_c = 0.0, Ly_c = 0.0, Lz_c = 0.0;
+            for (int i = 0; i < (int)bodies.size(); i++) {
+                Lx_c += bodies[i].mass * (bodies[i].y * bodies[i].vz - bodies[i].z * bodies[i].vy);
+                Ly_c += bodies[i].mass * (bodies[i].z * bodies[i].vx - bodies[i].x * bodies[i].vz);
+                Lz_c += bodies[i].mass * (bodies[i].x * bodies[i].vy - bodies[i].y * bodies[i].vx);
+            }
+            double L_cur   = std::sqrt(Lx_c*Lx_c + Ly_c*Ly_c + Lz_c*Lz_c);
+            double E_drift = (E0 != 0.0) ? (E_cur - E0) / std::abs(E0) * 100.0 : 0.0;
+            double L_drift = (L0 != 0.0) ? (L_cur - L0) / std::abs(L0) * 100.0 : 0.0;
+
+            const float eH     = 90.0f;
+            const float panelW = 280.0f;
+            float panelX = (float)screenW - panelW - 18.0f;
+            float epy    = (float)screenH - eH - 18.0f;
+
+            glm::mat4 ortho2 = glm::ortho(0.0f, (float)screenW, (float)screenH, 0.0f, -1.0f, 1.0f);
+            glUseProgram(simpleShader);
+            glUniformMatrix4fv(sMVP, 1, GL_FALSE, glm::value_ptr(ortho2));
+
+            drawRect(panelX, epy, panelW, eH, glm::vec4(0.04f, 0.04f, 0.10f, 0.88f));
+            drawRect(panelX, epy, 4.0f, eH, glm::vec4(0.6f, 0.6f, 1.0f, 1.0f));
+
+            const float ts = 2.0f, lh = 18.0f;
+            float tx = panelX + 10.0f;
+            float ty = epy + 8.0f;
+            drawText(tx, ty, ts, "E:  " + fmtSci(std::abs(E_cur)) + " J",
+                glm::vec4(0.8f, 0.8f, 1.0f, 1.0f));
+            ty += lh;
+            drawText(tx, ty, ts, "    drift " + fmt(E_drift, 5) + "%",
+                glm::vec4(0.65f, 0.65f, 0.9f, 1.0f));
+            ty += lh + 2.0f;
+            drawText(tx, ty, ts, "|L|: " + fmtSci(L_cur) + " kg m2/s",
+                glm::vec4(0.8f, 1.0f, 0.8f, 1.0f));
+            ty += lh;
+            drawText(tx, ty, ts, "     drift " + fmt(L_drift, 5) + "%",
+                glm::vec4(0.6f, 0.85f, 0.6f, 1.0f));
+        }
+
+        if (showCOM && numBodies >= 2) {
+            double tm = 0.0;
+            for (auto& b : bodies) tm += b.mass;
+            double cx = 0.0, cy_c = 0.0, cz = 0.0;
+            for (auto& b : bodies) {
+                cx   += b.mass * b.x;
+                cy_c += b.mass * b.y;
+                cz   += b.mass * b.z;
+            }
+            cx /= tm; cy_c /= tm; cz /= tm;
+
+            float s = (float)RENDER_SCALE;
+            float cpx = (float)(cx * s);
+            float cpy = (float)(cy_c * s);
+            float cpz = (float)(cz * s);
+            float crossH = 0.14f * (camDist / 12.0f);
+
+            glUseProgram(simpleShader);
+            glUniformMatrix4fv(sMVP, 1, GL_FALSE, glm::value_ptr(MVP));
+            glBindVertexArray(comVAO);
+            glBindBuffer(GL_ARRAY_BUFFER, comVBO);
+
+            float cv[] = {
+                cpx - crossH, cpy,          cpz,
+                cpx + crossH, cpy,          cpz,
+                cpx,          cpy - crossH, cpz,
+                cpx,          cpy + crossH, cpz,
+                cpx,          cpy,          cpz - crossH,
+                cpx,          cpy,          cpz + crossH,
+            };
+            glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(cv), cv);
+            glUniform4f(sColor, 1.0f, 1.0f, 0.3f, 0.9f);
+            glDrawArrays(GL_LINES, 0, 6);
+
+            glm::mat4 ortho3 = glm::ortho(0.0f, (float)screenW, (float)screenH, 0.0f, -1.0f, 1.0f);
+            glUniformMatrix4fv(sMVP, 1, GL_FALSE, glm::value_ptr(ortho3));
+            glm::vec2 comSP = worldToScreen(glm::vec3(cpx, cpy, cpz), MVP, screenW, screenH);
+            drawText(comSP.x + 6.0f, comSP.y - 8.0f, 1.5f, "COM",
+                glm::vec4(1.0f, 1.0f, 0.3f, 0.9f));
+
+            glUniformMatrix4fv(sMVP, 1, GL_FALSE, glm::value_ptr(MVP));
         }
 
         ImGui::Render();
