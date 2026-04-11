@@ -489,6 +489,9 @@ int main() {
             computeGravity(bodies[i], bodies[j], G);
 
     bodiesInitial = bodies;
+    std::vector<double>      massSolarsInitial = massSolars;
+    std::vector<double>      radiiInitial      = radii;
+    std::vector<std::string> bodyNamesInitial  = bodyNames;
 
     //--- Planet VAO/VBO ---
     unsigned int planetVAO, planetVBO;
@@ -644,9 +647,11 @@ int main() {
 
         if (!ImGui::GetIO().WantCaptureKeyboard &&
             glfwGetKey(window, GLFW_KEY_R) == GLFW_PRESS) {
-            bodies    = bodiesInitial;
-            numBodies = (int)bodies.size();
-            massSolars.resize(numBodies); radii.resize(numBodies); bodyNames.resize(numBodies);
+            bodies     = bodiesInitial;
+            massSolars = massSolarsInitial;
+            radii      = radiiInitial;
+            bodyNames  = bodyNamesInitial;
+            numBodies  = (int)bodies.size();
             for (int i = 0; i < 8; i++) trails[i].clear();
         }
 
@@ -664,9 +669,11 @@ int main() {
             paused = !paused;
         ImGui::SameLine();
         if (ImGui::Button("Reset", ImVec2(60, 0))) {
-            bodies    = bodiesInitial;
-            numBodies = (int)bodies.size();
-            massSolars.resize(numBodies); radii.resize(numBodies); bodyNames.resize(numBodies);
+            bodies     = bodiesInitial;
+            massSolars = massSolarsInitial;
+            radii      = radiiInitial;
+            bodyNames  = bodyNamesInitial;
+            numBodies  = (int)bodies.size();
             for (int i = 0; i < 8; i++) trails[i].clear();
         }
         ImGui::SameLine();
@@ -748,34 +755,156 @@ int main() {
                 // Final drift(c4=c1)
                 for (auto& b : bodies) { b.x += b.vx*c1*dt; b.y += b.vy*c1*dt; b.z += b.vz*c1*dt; }
 
-                // Collision/merger — if two bodies get within 0.005 AU they merge
+                // Collision detection and response.
+                // Regimes (based on relative speed vs mutual escape velocity, and impact parameter):
+                //   hit-and-run     — grazing, both survive with elastic-ish bounce
+                //   perfect merge   — slow/head-on, bodies combine (original behaviour)
+                //   partial accretion — medium energy, large remnant + small ejecta fragment
+                //   catastrophic    — high energy, two comparable fragments
                 for (int i = 0; i < (int)bodies.size(); i++) {
                     for (int j = i+1; j < (int)bodies.size(); j++) {
-                        double ddx = bodies[i].x - bodies[j].x;
-                        double ddy = bodies[i].y - bodies[j].y;
-                        double ddz = bodies[i].z - bodies[j].z;
-                        if (std::sqrt(ddx*ddx + ddy*ddy + ddz*ddz) > 0.005 * AU) continue;
-                        // Merge j into i — conserve mass, momentum, and volume
-                        double mTot = bodies[i].mass + bodies[j].mass;
-                        bodies[i].x  = (bodies[i].mass*bodies[i].x  + bodies[j].mass*bodies[j].x)  / mTot;
-                        bodies[i].y  = (bodies[i].mass*bodies[i].y  + bodies[j].mass*bodies[j].y)  / mTot;
-                        bodies[i].z  = (bodies[i].mass*bodies[i].z  + bodies[j].mass*bodies[j].z)  / mTot;
-                        bodies[i].vx = (bodies[i].mass*bodies[i].vx + bodies[j].mass*bodies[j].vx) / mTot;
-                        bodies[i].vy = (bodies[i].mass*bodies[i].vy + bodies[j].mass*bodies[j].vy) / mTot;
-                        bodies[i].vz = (bodies[i].mass*bodies[i].vz + bodies[j].mass*bodies[j].vz) / mTot;
-                        bodies[i].mass    = mTot;
-                        massSolars[i]    += massSolars[j];
-                        // Radius grows with cube root of combined volume
-                        bodies[i].radius  = std::cbrt(std::pow(radii[i],3.0) + std::pow(radii[j],3.0));
-                        radii[i]          = bodies[i].radius;
-                        bodyNames[i]      = bodyNames[i] + "+" + bodyNames[j];
+                        double rx = bodies[i].x - bodies[j].x;
+                        double ry = bodies[i].y - bodies[j].y;
+                        double rz = bodies[i].z - bodies[j].z;
+                        double dist = std::sqrt(rx*rx + ry*ry + rz*rz);
+                        if (dist > 0.005 * AU) continue;
+
+                        double mi = bodies[i].mass, mj = bodies[j].mass;
+                        double mTot = mi + mj;
+
+                        // Relative velocity (i relative to j)
+                        double dvx = bodies[i].vx - bodies[j].vx;
+                        double dvy = bodies[i].vy - bodies[j].vy;
+                        double dvz = bodies[i].vz - bodies[j].vz;
+                        double vRel = std::sqrt(dvx*dvx + dvy*dvy + dvz*dvz);
+
+                        // Mutual escape velocity at collision distance
+                        double vEsc = std::sqrt(2.0 * G * mTot / std::max(dist, 1e6));
+
+                        // Impact parameter ratio ξ ∈ [0,1]: 0 = head-on, 1 = grazing
+                        // b = |r × v̂_rel|,  ξ = b / dist
+                        double cpx = ry*dvz - rz*dvy;
+                        double cpy = rz*dvx - rx*dvz;
+                        double cpz = rx*dvy - ry*dvx;
+                        double bParam = (vRel > 0.0)
+                            ? std::sqrt(cpx*cpx + cpy*cpy + cpz*cpz) / vRel : 0.0;
+                        double xi = std::min(bParam / dist, 1.0);
+
+                        // COM position and velocity (conserved in all regimes)
+                        double comX  = (mi*bodies[i].x  + mj*bodies[j].x)  / mTot;
+                        double comY  = (mi*bodies[i].y  + mj*bodies[j].y)  / mTot;
+                        double comZ  = (mi*bodies[i].z  + mj*bodies[j].z)  / mTot;
+                        double comVX = (mi*bodies[i].vx + mj*bodies[j].vx) / mTot;
+                        double comVY = (mi*bodies[i].vy + mj*bodies[j].vy) / mTot;
+                        double comVZ = (mi*bodies[i].vz + mj*bodies[j].vz) / mTot;
+
+                        // Collision normal: unit vector from j toward i
+                        double nx = rx / dist, ny = ry / dist, nz = rz / dist;
+
+                        // Classify regime
+                        bool hitAndRun    = (xi > 0.65 && vRel < 2.5 * vEsc);
+                        bool catastrophic = (vRel >= 3.0 * vEsc);
+                        bool partial      = (!hitAndRun && !catastrophic && vRel >= 1.5 * vEsc);
+                        // else: perfect merge
+
+                        // ---- HIT AND RUN: grazing encounter, both bodies survive ----
+                        if (hitAndRun) {
+                            double vDotN = dvx*nx + dvy*ny + dvz*nz;
+                            if (vDotN < 0.0) {  // only apply impulse when approaching
+                                double e = glm::clamp(0.3 + 0.5 * xi, 0.0, 0.85);
+                                double J = -(1.0 + e) * vDotN / (1.0/mi + 1.0/mj);
+                                bodies[i].vx += J/mi * nx;
+                                bodies[i].vy += J/mi * ny;
+                                bodies[i].vz += J/mi * nz;
+                                bodies[j].vx -= J/mj * nx;
+                                bodies[j].vy -= J/mj * ny;
+                                bodies[j].vz -= J/mj * nz;
+                            }
+                            continue;  // no bodies removed or added
+                        }
+
+                        // ---- DETERMINE FRAGMENT MASS SPLIT ----
+                        double r3Total   = std::pow(radii[i], 3.0) + std::pow(radii[j], 3.0);
+                        bool   spawnFrag = (numBodies < 8) && (catastrophic || partial);
+
+                        double frag1Frac = 1.0;
+                        if (catastrophic && spawnFrag) {
+                            frag1Frac = 0.50 + 0.08 * xi;      // 50–58 %, heavier piece
+                        } else if (partial && spawnFrag) {
+                            double er = glm::clamp(vRel / vEsc, 1.5, 3.0);
+                            frag1Frac = 1.0 - 0.20 * (er - 1.5) / 1.5;  // 80 %→60 % as energy rises
+                        }
+                        double frag1Mass = mTot * frag1Frac;
+                        double frag2Mass = mTot * (1.0 - frag1Frac);
+
+                        // ---- EJECTION VELOCITY IN COM FRAME ----
+                        // v1 = comV + (m2/M)*vEject*n̂  (conserves momentum by construction)
+                        // v2 = comV - (m1/M)*vEject*n̂
+                        double vEject = 0.0;
+                        if (spawnFrag) {
+                            vEject = catastrophic
+                                ? std::max(0.25 * vRel, 1.1 * vEsc)
+                                : std::max(0.10 * vRel, 0.5 * vEsc);
+                        }
+                        double v1x = comVX + (frag2Mass/mTot) * vEject * nx;
+                        double v1y = comVY + (frag2Mass/mTot) * vEject * ny;
+                        double v1z = comVZ + (frag2Mass/mTot) * vEject * nz;
+                        double v2x = comVX - (frag1Mass/mTot) * vEject * nx;
+                        double v2y = comVY - (frag1Mass/mTot) * vEject * ny;
+                        double v2z = comVZ - (frag1Mass/mTot) * vEject * nz;
+
+                        // Fragment radii: split total volume proportional to mass
+                        double r1new = std::cbrt(r3Total * frag1Frac);
+                        double r2new = std::cbrt(r3Total * (1.0 - frag1Frac));
+
+                        // Place fragments > 0.005 AU apart so they don't immediately re-collide
+                        const double FRAG_SEP = 0.003 * AU;
+
+                        // ---- UPDATE BODY i (primary remnant) ----
+                        std::string baseName = bodyNames[i] + "+" + bodyNames[j];
+                        bodies[i].mass   = frag1Mass;
+                        bodies[i].radius = r1new;
+                        bodies[i].x  = spawnFrag ? comX + nx * FRAG_SEP : comX;
+                        bodies[i].y  = spawnFrag ? comY + ny * FRAG_SEP : comY;
+                        bodies[i].z  = spawnFrag ? comZ + nz * FRAG_SEP : comZ;
+                        bodies[i].vx = v1x; bodies[i].vy = v1y; bodies[i].vz = v1z;
+                        bodies[i].ax = bodies[i].ay = bodies[i].az = 0.0;
+                        massSolars[i] = frag1Mass / SOLAR_MASS;
+                        radii[i]      = r1new;
+                        bodyNames[i]  = baseName;
+
+                        // ---- ERASE BODY j, SHIFT TRAILS DOWN ----
                         bodies.erase(bodies.begin() + j);
-                        trails[j].clear();
+                        for (int k = j; k < numBodies - 1; k++) trails[k] = std::move(trails[k+1]);
+                        trails[numBodies - 1].clear();
                         massSolars.erase(massSolars.begin() + j);
                         radii.erase(radii.begin() + j);
                         bodyNames.erase(bodyNames.begin() + j);
                         numBodies--;
-                        j--;
+
+                        // ---- SPAWN DEBRIS FRAGMENT AT SLOT j (if fragmenting) ----
+                        if (spawnFrag) {
+                            Body frag{};
+                            frag.mass   = frag2Mass;
+                            frag.radius = r2new;
+                            frag.x  = comX - nx * FRAG_SEP;
+                            frag.y  = comY - ny * FRAG_SEP;
+                            frag.z  = comZ - nz * FRAG_SEP;
+                            frag.vx = v2x; frag.vy = v2y; frag.vz = v2z;
+
+                            bodies.insert(bodies.begin() + j, frag);
+                            // Shift trails up to open slot j
+                            for (int k = numBodies; k > j; k--) trails[k] = std::move(trails[k-1]);
+                            trails[j].clear();
+                            massSolars.insert(massSolars.begin() + j, frag2Mass / SOLAR_MASS);
+                            radii.insert(radii.begin() + j, r2new);
+                            bodyNames.insert(bodyNames.begin() + j,
+                                catastrophic ? "Debris" : "Ejecta");
+                            numBodies++;
+                            // Don't decrement j: loop's j++ will advance past the new fragment
+                        } else {
+                            j--;  // re-examine what's now at position j (was j+1 before erase)
+                        }
                     }
                 }
             }
