@@ -42,10 +42,11 @@ bool  mouseHeld = false;
 double lastMouseX = 0.0, lastMouseY = 0.0;
 
 //--- Simulation state ---
-bool paused      = false;
-bool showPanel   = true;    // toggle with I key
-bool showForces  = true;    // toggle with F key
-bool showSpin    = true;    // toggle with S key
+bool paused        = false;
+bool showPanel     = true;    // toggle with I key
+bool showForces    = true;    // toggle with F key
+bool showSpin      = true;    // toggle with S key
+bool showLagrange  = true;    // toggle with L key
 int  numBodies   = 2;
 std::vector<Body>         bodiesInitial;
 std::deque<glm::vec3>     trails[8];
@@ -72,6 +73,8 @@ void keyCallback(GLFWwindow* window, int key, int scancode, int action, int mods
         showForces = !showForces;
     if (action == GLFW_PRESS && key == GLFW_KEY_S)
         showSpin = !showSpin;
+    if (action == GLFW_PRESS && key == GLFW_KEY_L)
+        showLagrange = !showLagrange;
     if (action == GLFW_PRESS || action == GLFW_REPEAT) {
         if (key == GLFW_KEY_UP   || key == GLFW_KEY_RIGHT)
             STEPS_PER_FRAME = glm::clamp(STEPS_PER_FRAME + 1, 1, 100);
@@ -613,6 +616,16 @@ int main() {
     glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), (void*)0);
     glEnableVertexAttribArray(0);
 
+    //--- Lagrange VAO/VBO — "+" cross markers; each cross = 4 line segments = 8 vertices ---
+    // Max pairs: 8*7/2 = 28; 5 points each; 2 cross lines each; 4 vertices each = 28*5*2*4 = 1120 vertices
+    unsigned int lagrangeVAO, lagrangeVBO;
+    glGenVertexArrays(1, &lagrangeVAO); glGenBuffers(1, &lagrangeVBO);
+    glBindVertexArray(lagrangeVAO);
+    glBindBuffer(GL_ARRAY_BUFFER, lagrangeVBO);
+    glBufferData(GL_ARRAY_BUFFER, 1120 * 3 * sizeof(float), nullptr, GL_DYNAMIC_DRAW);
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), (void*)0);
+    glEnableVertexAttribArray(0);
+
     //--- UI VAO/VBO — reused each frame for panel backgrounds, stems, and text quads ---
     unsigned int uiVAO, uiVBO;
     glGenVertexArrays(1, &uiVAO); glGenBuffers(1, &uiVBO);
@@ -734,6 +747,7 @@ int main() {
         ImGui::Checkbox("Info (I)", &showPanel);
         ImGui::SameLine();
         ImGui::Checkbox("Spin (S)", &showSpin);
+        ImGui::Checkbox("Lagrange (L)", &showLagrange);
 
         ImGui::Separator();
         ImGui::TextDisabled("Body masses (solar masses)");
@@ -1155,6 +1169,138 @@ int main() {
                     drawArrow3D(posJ, -dirIJ, arrowLen, BODY_COLORS[j]);
                 }
             }
+        }
+
+        //--- Lagrange points — collinear (L1,L2,L3) and equilateral (L4,L5) for each body pair ---
+        if (showLagrange && numBodies >= 2) {
+            // Compute L-points and store them for 3D marker drawing + 2D label pass
+            struct LPoint { glm::vec3 pos; glm::vec4 color; const char* label; };
+            std::vector<LPoint> lpoints;
+
+            float s = (float)RENDER_SCALE;
+
+            for (int i = 0; i < numBodies; i++) {
+                for (int j = i+1; j < numBodies; j++) {
+                    // Identify primary (heavier) and secondary (lighter) for canonical L-point geometry.
+                    // L1 is between them, L2 beyond secondary, L3 beyond primary.
+                    int pi = (bodies[i].mass >= bodies[j].mass) ? i : j;
+                    int si = (bodies[i].mass >= bodies[j].mass) ? j : i;
+
+                    double m1 = bodies[pi].mass, m2 = bodies[si].mass;
+                    double mTot = m1 + m2;
+                    double q = m2 / mTot;   // mass ratio (secondary fraction)
+
+                    // Separation vector from primary to secondary (physical units)
+                    double dx = bodies[si].x - bodies[pi].x;
+                    double dy = bodies[si].y - bodies[pi].y;
+                    double dz = bodies[si].z - bodies[pi].z;
+                    double d  = std::sqrt(dx*dx + dy*dy + dz*dz);
+                    if (d < 1e6) continue;  // skip merged/coincident bodies
+
+                    // Unit vector primary → secondary
+                    glm::dvec3 rHat(dx/d, dy/d, dz/d);
+
+                    // Hill sphere radius (L1 distance from secondary / L2 offset)
+                    double rHill = d * std::cbrt(q / 3.0);
+
+                    // Primary position in render-space
+                    glm::vec3 pPos((float)(bodies[pi].x * s),
+                                   (float)(bodies[pi].y * s),
+                                   (float)(bodies[pi].z * s));
+
+                    glm::vec3 rHatF((float)rHat.x, (float)rHat.y, (float)rHat.z);
+                    float df = (float)(d * s);
+                    float rHillF = (float)(rHill * s);
+
+                    // L1 — between primary and secondary, rHill inward from secondary
+                    glm::vec3 posL1 = pPos + rHatF * (df - rHillF);
+                    // L2 — beyond secondary by rHill
+                    glm::vec3 posL2 = pPos + rHatF * (df + rHillF);
+                    // L3 — behind primary, approximate: d*(1 + 5q/12) from primary opposite to secondary
+                    float L3dist = (float)(d * (1.0 + 5.0*q/12.0) * s);
+                    glm::vec3 posL3 = pPos - rHatF * L3dist;
+
+                    // L4/L5 — equilateral triangle vertices; ±60° from secondary around primary
+                    // Perpendicular vector in the orbital plane: cross(rHat, orbit_normal)
+                    // Use the relative velocity direction to estimate orbital plane normal
+                    double rvx = bodies[si].vx - bodies[pi].vx;
+                    double rvy = bodies[si].vy - bodies[pi].vy;
+                    double rvz = bodies[si].vz - bodies[pi].vz;
+                    glm::dvec3 rVel(rvx, rvy, rvz);
+                    glm::dvec3 orbitNorm = glm::cross(rHat, rVel);
+                    double oNormLen = glm::length(orbitNorm);
+
+                    // Pair color: blend of the two body colors
+                    glm::vec3 pairCol = glm::mix(BODY_COLORS[pi], BODY_COLORS[si], 0.5f);
+                    glm::vec4 col4(pairCol.r, pairCol.g, pairCol.b, 0.85f);
+
+                    lpoints.push_back({ posL1, col4, "L1" });
+                    lpoints.push_back({ posL2, col4, "L2" });
+                    lpoints.push_back({ posL3, col4, "L3" });
+
+                    if (oNormLen > 1e-30) {
+                        glm::dvec3 nHat = orbitNorm / oNormLen;
+                        // Perpendicular unit vector in orbital plane (toward L4/L5)
+                        glm::dvec3 perpHat = glm::cross(nHat, rHat);
+
+                        // L4/L5 at the same distance d from both bodies (equilateral triangle)
+                        // Position: primary + d*(cos60°*rHat ± sin60°*perpHat)
+                        // = primary + d*(0.5*rHat ± (sqrt3/2)*perpHat)
+                        double sin60 = std::sqrt(3.0) / 2.0;
+                        glm::dvec3 L4off = rHat * 0.5 + perpHat * sin60;
+                        glm::dvec3 L5off = rHat * 0.5 - perpHat * sin60;
+
+                        glm::vec3 posL4(
+                            (float)(bodies[pi].x * s + L4off.x * d * s),
+                            (float)(bodies[pi].y * s + L4off.y * d * s),
+                            (float)(bodies[pi].z * s + L4off.z * d * s));
+                        glm::vec3 posL5(
+                            (float)(bodies[pi].x * s + L5off.x * d * s),
+                            (float)(bodies[pi].y * s + L5off.y * d * s),
+                            (float)(bodies[pi].z * s + L5off.z * d * s));
+
+                        lpoints.push_back({ posL4, col4, "L4" });
+                        lpoints.push_back({ posL5, col4, "L5" });
+                    }
+                }
+            }
+
+            // Draw "+" cross markers in 3D world space
+            glUseProgram(simpleShader);
+            glUniformMatrix4fv(sMVP, 1, GL_FALSE, glm::value_ptr(MVP));
+            glBindVertexArray(lagrangeVAO);
+            glBindBuffer(GL_ARRAY_BUFFER, lagrangeVBO);
+
+            float crossHalf = 0.12f * (camDist / 12.0f);  // scale cross size with zoom
+
+            for (auto& lp : lpoints) {
+                float v[] = {
+                    lp.pos.x - crossHalf, lp.pos.y,             lp.pos.z,
+                    lp.pos.x + crossHalf, lp.pos.y,             lp.pos.z,
+                    lp.pos.x,             lp.pos.y - crossHalf, lp.pos.z,
+                    lp.pos.x,             lp.pos.y + crossHalf, lp.pos.z,
+                    lp.pos.x,             lp.pos.y,             lp.pos.z - crossHalf,
+                    lp.pos.x,             lp.pos.y,             lp.pos.z + crossHalf,
+                };
+                glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(v), v);
+                glUniform4f(sColor, lp.color.r, lp.color.g, lp.color.b, lp.color.a);
+                glDrawArrays(GL_LINES, 0, 6);
+            }
+
+            // Draw labels in 2D screen space
+            glm::mat4 ortho = glm::ortho(0.0f, (float)screenW, (float)screenH, 0.0f, -1.0f, 1.0f);
+            glUniformMatrix4fv(sMVP, 1, GL_FALSE, glm::value_ptr(ortho));
+
+            for (auto& lp : lpoints) {
+                glm::vec2 sp = worldToScreen(lp.pos, MVP, screenW, screenH);
+                // Skip if behind camera (w < 0 check via clip test — if off-screen, skip)
+                if (sp.x < -100 || sp.x > screenW + 100 || sp.y < -100 || sp.y > screenH + 100) continue;
+                drawText(sp.x + 6.0f, sp.y - 8.0f, 1.5f, lp.label,
+                    glm::vec4(lp.color.r, lp.color.g, lp.color.b, 0.9f));
+            }
+
+            // Restore 3D MVP for subsequent passes
+            glUniformMatrix4fv(sMVP, 1, GL_FALSE, glm::value_ptr(MVP));
         }
 
         //--- Info panel overlay (drawn in 2D screen space) ---

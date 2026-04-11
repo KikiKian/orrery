@@ -17,7 +17,7 @@
   - [x] ~~Add axial tilt and rotation for each body~~
   - [x] ~~Model non-spherical bodies (oblateness / J2 perturbations)~~
   - [x] ~~Add tidal forces between close bodies~~
-  - [ ] Implement Lagrange points and show them visually
+  - [x] ~~Implement Lagrange points and show them visually~~
   - [ ] Support multi-star systems (barycenter tracking)
   - [ ] Add atmospheric drag for low-orbit scenarios
   - [ ] Add planet textures

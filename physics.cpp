@@ -190,14 +190,14 @@ void computeTides(Body& p1, Body& p2, double G, double dt) {
         if (std::abs(cos2) > 1e-6)
             p2.angular_velocity += (T2 / I2 * dt) / cos2;
 
-        // p1 is the perturber here; tangential direction for p1 is -t̂
+        // Mirror of p1-tide block with roles swapped
         double dv2 = T2 * dt / r;
-        p1.vx -= (dv2 / p1.mass) * tx;
-        p1.vy -= (dv2 / p1.mass) * ty;
-        p1.vz -= (dv2 / p1.mass) * tz;
-        p2.vx += (dv2 / p2.mass) * tx;
-        p2.vy += (dv2 / p2.mass) * ty;
-        p2.vz += (dv2 / p2.mass) * tz;
+        p2.vx -= (dv2 / p2.mass) * tx;
+        p2.vy -= (dv2 / p2.mass) * ty;
+        p2.vz -= (dv2 / p2.mass) * tz;
+        p1.vx += (dv2 / p1.mass) * tx;
+        p1.vy += (dv2 / p1.mass) * ty;
+        p1.vz += (dv2 / p1.mass) * tz;
     }
 }
 
