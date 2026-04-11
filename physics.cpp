@@ -33,20 +33,3 @@ void computeGravity(Body& p1, Body& p2, double G) {
     p2.az -= az / p2.mass;
 }
 
-void updateBody(Body& b, double dt) {
-    // Symplectic Euler — much more stable than regular Euler for orbital mechanics
-    // Update velocity first
-    b.vx += b.ax * dt;
-    b.vy += b.ay * dt;
-    b.vz += b.az * dt;
-
-    // Update position using NEW velocity (key difference from regular Euler)
-    b.x += b.vx * dt;
-    b.y += b.vy * dt;
-    b.z += b.vz * dt;
-
-    // Reset acceleration for next frame
-    b.ax = 0.0;
-    b.ay = 0.0;
-    b.az = 0.0;
-}
