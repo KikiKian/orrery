@@ -15,8 +15,8 @@
         -> Decided to go with Yoshida
   - [x] ~~Add relativistic corrections for very close orbits~~
   - [x] ~~Add axial tilt and rotation for each body~~
-  - [ ] Model non-spherical bodies (oblateness / J2 perturbations)
-  - [ ] Add tidal forces between close bodies
+  - [x] ~~Model non-spherical bodies (oblateness / J2 perturbations)~~
+  - [x] ~~Add tidal forces between close bodies~~
   - [ ] Implement Lagrange points and show them visually
   - [ ] Support multi-star systems (barycenter tracking)
   - [ ] Add atmospheric drag for low-orbit scenarios

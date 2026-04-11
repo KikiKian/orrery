@@ -1,6 +1,8 @@
 ﻿# Orrery
  A real-time 3D gravitational simulation written in C++ with OpenGL. Configure 2–8 bodies using real planetary presets or custom masses, then watch Newtonian gravity play out — complete with orbital trails, physically-classified collisions, and a live info panel.
 
+> **Note:** This project is partially vibecoded — built collaboratively with an AI assistant. The physics is real; some of the code got there by vibes.
+
 ##
 Orerry (noun.) — a mechanical, usually clockwork-driven model of the solar system that illustrates the relative positions and motions of planets and moons, typically with a sun at the center.
 ---
@@ -14,6 +16,7 @@ Orerry (noun.) — a mechanical, usually clockwork-driven model of the solar sys
 - **Yoshida 4th-order symplectic integration** — 3-stage leapfrog composition for superior long-term orbital energy conservation
 - **1PN relativistic corrections** — Einstein-Infeld-Hoffmann equations applied per body pair, producing orbital precession (e.g. Mercury's 43″/century) for close or fast orbits
 - **Axial tilt and rotation** — each body spins on a physically accurate axis (real solar system obliquities and sidereal periods); visualised as a spin-axis line and equatorial ring (toggle `S`)
+- **Tidal spin-orbit coupling** — constant time-lag tidal torques gradually despin bodies and evolve orbits; real `k₂` and `Q` values are loaded for all Solar System presets
 - **2–8 configurable bodies** — choose from Sun, Jupiter, Saturn, Neptune, Uranus, Earth, Venus, Mars, Mercury, or a custom mass
 - **Physically-classified collisions** — close encounters (< 0.005 AU) are resolved into one of four regimes based on relative speed vs. mutual escape velocity and impact parameter:
   - **Hit-and-run** — grazing encounter; both bodies survive with a partially elastic impulse
@@ -157,6 +160,22 @@ When two bodies come within 0.005 AU, the collision is classified using:
 | `v_rel ≥ 3·v_esc` | Catastrophic disruption |
 
 Fragment velocities are computed in the centre-of-mass frame and transformed back to the lab frame, guaranteeing momentum conservation in all regimes. Fragment radii follow the cube-root volume rule.
+
+### Tidal forces
+
+Each body stores a tidal Love number `k₂` (deformability) and tidal quality factor `Q` (inverse dissipation). At each time step the **constant time-lag (CTL) tidal torque** is computed for every body pair:
+
+```
+T_i = −C_i · (Ω_i − n_orb)
+C_i = (3/2) · G · mj² · k2_i · R_eq_i⁵ / (Q_i · r⁶)
+```
+
+where `Ω_i` is the spin rate projected onto the orbital axis and `n_orb = sqrt(G·M/r³)` is the mean orbital motion. Two effects are applied:
+
+1. **Spin change** — `dΩ_i = T_i / I_i · dt`, where `I_i = 0.4·m_i·R_eq_i²` (solid sphere)
+2. **Orbital velocity kick** — tangential Δv conserving total (spin + orbital) angular momentum
+
+This reproduces phenomena like tidal despinning, synchronous rotation lock, and orbital expansion/decay. The effect is tiny per step (~10⁻¹⁴ of orbital speed for Earth–Sun) but accumulates over geological timescales. With the simulation speed cranked up, Earth–Moon tidal recession and gas giant spin-down are observable.
 
 ---
 

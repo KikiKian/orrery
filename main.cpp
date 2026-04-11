@@ -183,7 +183,7 @@ unsigned int compileShader(const char* vertSrc, const char* fragSrc) {
     return prog;
 }
 
-//--- Body presets with real masses, visual sizes, and rotation data ---
+//--- Body presets with real masses, visual sizes, rotation, oblateness, and tidal data ---
 struct Preset {
     const char* name;
     double massSolar;        // mass in solar masses
@@ -191,19 +191,23 @@ struct Preset {
     double orbitalRadiusAU;  // real mean orbital radius from the Sun in AU
     double axialTiltDeg;     // obliquity — tilt of spin axis from +Y (degrees)
     double spinPeriodDays;   // sidereal rotation period in days; negative = retrograde
+    double J2;               // second zonal harmonic (oblateness); 0 = perfect sphere
+    double R_eq;             // equatorial radius (metres)
+    double k2;               // tidal Love number (deformability; 0–1)
+    double tidal_Q;          // tidal quality factor (higher = less dissipation)
 };
 const Preset PRESETS[] = {
-    //           name       mass       radius  orb.AU  tilt(°)  period(days)
-    { "Sun",     1.0,       40.0,   0.0,     7.25,    25.380  },
-    { "Jupiter", 9.54e-4,   28.0,   5.203,   3.13,     0.4135 },
-    { "Saturn",  2.84e-4,   23.0,   9.537,  26.73,     0.4440 },
-    { "Neptune", 5.15e-5,   16.0,  30.069,  28.32,     0.6713 },
-    { "Uranus",  4.37e-5,   15.0,  19.191,  97.77,    -0.7183 },  // near-sideways + retrograde
-    { "Earth",   3.00e-6,   12.0,   1.000,  23.44,     0.9973 },
-    { "Venus",   2.45e-6,   11.0,   0.723, 177.36,  -243.025  },  // retrograde
-    { "Mars",    3.21e-7,    9.0,   1.524,  25.19,     1.026  },
-    { "Mercury", 1.65e-7,    7.0,   0.387,   0.034,   58.646  },
-    { "Custom",  0.0,        0.0,   0.0,    23.0,      1.0    },
+    //           name       mass      visR   orbAU   tilt(°)  period(d)    J2         R_eq(m)      k2       Q
+    { "Sun",     1.0,       40.0,   0.0,     7.25,   25.380,  2.20e-7,  6.957e8,  0.028,  1.07e6 },
+    { "Jupiter", 9.54e-4,   28.0,   5.203,   3.13,    0.4135, 1.474e-2, 7.149e7,  0.379,  3.56e4 },
+    { "Saturn",  2.84e-4,   23.0,   9.537,  26.73,    0.4440, 1.630e-2, 6.027e7,  0.341,  1.68e4 },
+    { "Neptune", 5.15e-5,   16.0,  30.069,  28.32,    0.6713, 3.411e-3, 2.476e7,  0.127,  9000.0 },
+    { "Uranus",  4.37e-5,   15.0,  19.191,  97.77,   -0.7183, 3.343e-3, 2.556e7,  0.104,  8000.0 },
+    { "Earth",   3.00e-6,   12.0,   1.000,  23.44,    0.9973, 1.083e-3, 6.378e6,  0.299,    12.0 },
+    { "Venus",   2.45e-6,   11.0,   0.723, 177.36, -243.025,  4.458e-6, 6.052e6,  0.295,    17.0 },
+    { "Mars",    3.21e-7,    9.0,   1.524,  25.19,    1.026,  1.956e-3, 3.396e6,  0.169,    80.0 },
+    { "Mercury", 1.65e-7,    7.0,   0.387,   0.034,  58.646,  6.000e-5, 2.440e6,  0.100,    50.0 },
+    { "Custom",  0.0,        0.0,   0.0,    23.0,     1.0,    1.000e-3, 6.400e6,  0.300,   100.0 },
 };
 const int NUM_PRESETS = 10;
 
@@ -463,6 +467,15 @@ int main() {
         bodies[i].rotation_angle   = 0.0;
         bodies[i].angular_velocity = (periodDays != 0.0)
             ? 2.0 * 3.14159265358979323846 / (periodDays * 86400.0) : 0.0;
+
+        bodies[i].J2       = PRESETS[choice].J2;
+        bodies[i].R_eq     = PRESETS[choice].R_eq;
+        bodies[i].k2       = PRESETS[choice].k2;
+        bodies[i].tidal_Q  = PRESETS[choice].tidal_Q;
+        // Custom bodies: scale R_eq by cube-root of mass relative to Earth
+        if (choice == NUM_PRESETS - 1) {
+            bodies[i].R_eq = 6.378e6 * std::cbrt(massSolars[i] / 3.00e-6);
+        }
     }
 
     double total_mass = 0.0;
@@ -940,6 +953,11 @@ int main() {
                     }
                 }
             }
+            // Tidal spin-orbit coupling (once per full dt step, outside Yoshida sub-steps)
+            for (int i = 0; i < (int)bodies.size(); i++)
+                for (int j = i+1; j < (int)bodies.size(); j++)
+                    computeTides(bodies[i], bodies[j], G, dt);
+
             // Advance rotation phase
             for (int i = 0; i < numBodies; i++)
                 bodies[i].rotation_angle += bodies[i].angular_velocity * dt;
