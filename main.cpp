@@ -26,6 +26,7 @@
 
 //--- Real unit constants ---
 const double G            = 6.674e-11;   // gravitational constant (m^3 kg^-1 s^-2)
+const double C_LIGHT      = 2.998e8;     // speed of light (m/s)
 const double SOLAR_MASS   = 2.0e30;      // kg per solar mass
 const double AU           = 1.496e11;    // meters per AU
 const double RENDER_SCALE = 5.0 / AU;    // 1 AU = 5 screen units
@@ -486,7 +487,7 @@ int main() {
     // Compute initial forces (not strictly needed for Yoshida ABA, but keeps accelerations valid for display)
     for (int i = 0; i < numBodies; i++)
         for (int j = i+1; j < numBodies; j++)
-            computeGravity(bodies[i], bodies[j], G);
+            computeGravity(bodies[i], bodies[j], G, C_LIGHT);
 
     bodiesInitial = bodies;
     std::vector<double>      massSolarsInitial = massSolars;
@@ -734,7 +735,7 @@ int main() {
                     for (auto& b : bodies) { b.ax = b.ay = b.az = 0.0; }
                     for (int i = 0; i < (int)bodies.size(); i++)
                         for (int j = i+1; j < (int)bodies.size(); j++)
-                            computeGravity(bodies[i], bodies[j], G);
+                            computeGravity(bodies[i], bodies[j], G, C_LIGHT);
                 };
 
                 // Sub-step 1: drift(c1) → forces → kick(d1)

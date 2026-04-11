@@ -13,7 +13,7 @@
   - [x] ~~Implement proper planet collision / fragmentation~~
   - [x] ~~Evaluate replacing Velocity Verlet (Yoshida)~~
         -> Decided to go with Yoshida
-  - [ ] Add relativistic corrections for very close orbits
+  - [x] ~~Add relativistic corrections for very close orbits~~
   - [ ] Add axial tilt and rotation for each body
   - [ ] Model non-spherical bodies (oblateness / J2 perturbations)
   - [ ] Add tidal forces between close bodies

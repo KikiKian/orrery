@@ -12,6 +12,7 @@ Orerry (noun.) — a mechanical, usually clockwork-driven model of the solar sys
  
 - **Real physics units** — gravitational constant G, solar masses, AU distances, and 1-day time steps
 - **Yoshida 4th-order symplectic integration** — 3-stage leapfrog composition for superior long-term orbital energy conservation
+- **1PN relativistic corrections** — Einstein-Infeld-Hoffmann equations applied per body pair, producing orbital precession (e.g. Mercury's 43″/century) for close or fast orbits
 - **2–8 configurable bodies** — choose from Sun, Jupiter, Saturn, Neptune, Uranus, Earth, Venus, Mars, Mercury, or a custom mass
 - **Physically-classified collisions** — close encounters (< 0.005 AU) are resolved into one of four regimes based on relative speed vs. mutual escape velocity and impact parameter:
   - **Hit-and-run** — grazing encounter; both bodies survive with a partially elastic impulse
@@ -127,6 +128,17 @@ F = G * m1 * m2 / (r² + ε²)
 ```
 
 with a softening term `ε = 1×10⁹ m` to prevent singularities at very close range.
+
+### Relativistic corrections
+
+Each body pair also receives a **1PN Einstein-Infeld-Hoffmann** correction on top of the Newtonian force:
+
+```
+a_PN = (G·m₂ / r²c²) · { n̂ · [v₁² + 2v₂² − 4(v₁·v₂) − ³⁄₂(n̂·v₂)² + 5Gm₁/r + 4Gm₂/r]
+                         + (v₁ − v₂) · [4(n̂·v₁) − 3(n̂·v₂)] }
+```
+
+The correction is ~10⁻⁸ of the Newtonian force at typical orbital speeds (v²/c² ≈ 10⁻⁸), but accumulates over time to produce observable precession. It becomes significant for very close orbits or near-relativistic bodies.
 
 ### Collision physics
 
