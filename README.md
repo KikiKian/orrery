@@ -1,5 +1,5 @@
 ﻿# Orrery
- A real-time 3D gravitational simulation written in C++ with OpenGL. Configure 2–8 bodies using real planetary presets or custom masses, then watch Newtonian gravity play out — complete with orbital trails, body mergers, and a live info panel.
+ A real-time 3D gravitational simulation written in C++ with OpenGL. Configure 2–8 bodies using real planetary presets or custom masses, then watch Newtonian gravity play out — complete with orbital trails, physically-classified collisions, and a live info panel.
 
 ##
 Orerry (noun.) — a mechanical, usually clockwork-driven model of the solar system that illustrates the relative positions and motions of planets and moons, typically with a sun at the center.
@@ -11,9 +11,13 @@ Orerry (noun.) — a mechanical, usually clockwork-driven model of the solar sys
 ## Features
  
 - **Real physics units** — gravitational constant G, solar masses, AU distances, and 1-day time steps
-- **Velocity Verlet integration** — symplectic integrator for stable long-term orbital energy conservation
+- **Yoshida 4th-order symplectic integration** — 3-stage leapfrog composition for superior long-term orbital energy conservation
 - **2–8 configurable bodies** — choose from Sun, Jupiter, Saturn, Neptune, Uranus, Earth, Venus, Mars, Mercury, or a custom mass
-- **Body mergers** — when two bodies come within 0.005 AU, they combine conserving mass, momentum, and volume
+- **Physically-classified collisions** — close encounters (< 0.005 AU) are resolved into one of four regimes based on relative speed vs. mutual escape velocity and impact parameter:
+  - **Hit-and-run** — grazing encounter; both bodies survive with a partially elastic impulse
+  - **Perfect merge** — slow or head-on; bodies combine conserving mass, momentum, and volume
+  - **Partial accretion** — medium energy; large remnant (60–80 % of total mass) plus a smaller ejecta fragment
+  - **Catastrophic disruption** — high energy; two comparable fragments (~50/50 split) fly apart
 - **Orbital trails** — each body leaves a color-coded trail (up to 300 points)
 - **Live info panel** — real-time speed (km/s), distance (AU / million km), and mass (solar masses) per body
 - **Real-time controls panel** — pause, reset, adjust simulation speed, and edit body masses live via ImGui
@@ -109,81 +113,39 @@ g++ main.cpp physics.cpp glad.c \
 ---
 ## Physics
  
-See [FORMULAS.md](FORMULAS.md) for the full derivations. The core loop uses **Velocity Verlet**:
- 
-1. Half-kick: `v += 0.5 * a * dt`
-2. Drift: `x += v * dt`
-3. Recompute gravitational accelerations at new positions
-4. Second half-kick: `v += 0.5 * a * dt`
- 
+See [FORMULAS.md](FORMULAS.md) for the full derivations. The core loop uses the **Yoshida (1990) 4th-order ABA symplectic integrator** — a 3-stage composition of leapfrog steps that conserves energy far better than Velocity Verlet over long simulations:
+
+1. Drift `c₁·dt` → recompute forces → kick `d₁·dt`
+2. Drift `c₂·dt` → recompute forces → kick `d₂·dt`
+3. Drift `c₂·dt` → recompute forces → kick `d₁·dt`
+4. Final drift `c₁·dt`
+
 Gravitational force between each pair of bodies is computed as:
- 
+
 ```
-F = G * m1 * m2 / r²
+F = G * m1 * m2 / (r² + ε²)
 ```
- 
-with acceleration applied in the direction of the unit vector between them.
+
+with a softening term `ε = 1×10⁹ m` to prevent singularities at very close range.
+
+### Collision physics
+
+When two bodies come within 0.005 AU, the collision is classified using:
+
+- **`v_esc`** — mutual escape velocity at collision distance: `sqrt(2G(m₁+m₂)/r)`
+- **`ξ`** — impact parameter ratio `b/r` (0 = head-on, 1 = grazing)
+
+| Condition | Regime |
+|---|---|
+| `ξ > 0.65` and `v_rel < 2.5·v_esc` | Hit-and-run |
+| `v_rel < 1.5·v_esc` | Perfect merge |
+| `1.5·v_esc ≤ v_rel < 3·v_esc` | Partial accretion |
+| `v_rel ≥ 3·v_esc` | Catastrophic disruption |
+
+Fragment velocities are computed in the centre-of-mass frame and transformed back to the lab frame, guaranteeing momentum conservation in all regimes. Fragment radii follow the cube-root volume rule.
 
 ---
-# Tickets
-## Version: 1.2
 
-> To add to the tickets, open an issue! To help the project, fork this repo, do/add to the tickets, and make a pull request.
+## Tickets
 
-
-### High Priority
-- [x] ~~Add GUI~~
-  - [x] ~~Evaluate C++ GUI options (ImGui, Qt, wxWidgets)~~
-  - [x] ~~Make better input prompts (body count, mass, velocity)~~
-  - [x] ~~Add real-time parameter editing while simulation runs~~
-- [ ] Make physics more realistic
-  - [ ] Implement proper planet collision / fragmentation
-  - [x] ~~Evaluate replacing Velocity Verlet (Yoshida)~~
-        -> Decided to go with Yoshida
-  - [ ] Add relativistic corrections for very close orbits
-  - [ ] Add axial tilt and rotation for each body
-  - [ ] Model non-spherical bodies (oblateness / J2 perturbations)
-  - [ ] Add tidal forces between close bodies
-  - [ ] Implement Lagrange points and show them visually
-  - [ ] Support multi-star systems (barycenter tracking)
-  - [ ] Add atmospheric drag for low-orbit scenarios
-  - [ ] Add planet textures
-  - [ ] Variable time step — shrink dt automatically during close approaches
-  - [ ] Energy and angular momentum readout to measure integrator drift
-  - [ ] Add Spaceships (artemis II, Voyager, etc.) -- requested by kenlinkin2
-    - [ ] Abillity to control spaceship
-    - [ ] Affect of planets gravity on shpaceships
-    - [ ] Shape/texture of the spaceship
-- [ ] Make build more portable
-  - [ ] Bundle or auto-fetch GLFW (CMake FetchContent or vcpkg manifest)
-  - [x] ~~Resolve `glad_out` vs `glad.c` — pick one and remove the other~~
-  - [ ] Add a `CMakeLists.txt` so users don't have to hand-write the compile command
-
-### Low Priority
-
-- [ ] Make units more relatable (kg, m/s, lb toggle)
-- [ ] Add custom planet name, mass, radius, and starting velocity options
-- [ ] Add preset solar system configurations (inner solar system, gas giants, etc.)
-- [ ] Time display (simulated years / days elapsed)
-- [ ] Export trail data to CSV for external analysis
-
-### Chore
-
-- [ ] Quality of life
-  - [ ] Make grid background better
-    - [ ] Extend grid further out
-    - [ ] Different / configurable grid color
-  - [ ] Better mouse sensitivity / control tuning
-  - [ ] In-sim controls help overlay (`H` key)
-  - [ ] Pause / escape menu with resume option
-  - [ ] Fullscreen toggle
-- [ ] Dev quality of life
-  - [ ] Add unit tests for physics (verlet integrator, merger logic)
-  - [ ] Add integration test: known orbit stays stable over N steps
-  - [ ] Better inline comments on non-obvious physics code
-  - [ ] Refactor `main.cpp` — split rendering, UI, and sim-loop into separate files
-  - [ ] Set up CI (GitHub Actions) to build on push
-- [ ] Documentation
-  - [ ] Add / update screenshots
-  - [ ] Update build docs once CMake is added
-  - [x] ~~Add version changelog~~
+See [TICKETS.md](TICKETS.md) for the full issue tracker.
